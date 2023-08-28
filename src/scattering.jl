@@ -189,6 +189,17 @@ function σₜ(::Type{Browning1994}, elm::Element, E::Float64)
 end
 
 """
+    FOR PARAMETRIC MODEL
+
+"""
+function σₜ_all(ty::Type{<:ScreenedRutherfordType}, mat::ParametricMaterial, E::Float64)
+    return [σₜ(ty, elm, E) * atoms_per_g(elm) * mat.massfrac[i] * density(mat) for (i, elm) in enumerate(mat.elms)]
+end
+
+σₜ(ty::Type{<:ScreenedRutherfordType}, mat::ParametricMaterial, E::Real) = sum(σₜ_all(ty, mat, E))
+
+
+"""
     δσδΩ(::Type{ScreenedRutherford}, θ::Float64, elm::Element, E::Float64)::Float64
 
 The *differential* screened Rutherford cross-section per atom. 
@@ -233,15 +244,15 @@ function λ(ty::Type{<:ScreenedRutherfordType}, mfp::Float64, mat::ParametricMat
     pos = position(Electron(pc, mfp, θ′, ϕ′, E)) #ToDo: Optimise this
     c = massfractions(mat, pos)
     ρ = density(mat)
-    N = atoms_per_cm³(mat::ParametricMaterial)
-    σ_tot = sum(σₜ(ty, mat.elms[i], E) * N[i] for i in eachindex(c))
+    #N = atoms_per_cm³(mat::ParametricMaterial)
+    σ_tot = sum(σₜ(ty, elm, E) * (atoms_per_g(elm) * mat.massfrac[i] * density(mat)) for (i, elm) in enumerate(mat.elms))
     return 1. / σ_tot
 end
 function λ(ty::Type{<:ScreenedRutherfordType}, pos::AbstractVector, mat::ParametricMaterial, E::Float64)
     c = massfractions(mat, pos)
     ρ = density(mat)
-    N = atoms_per_cm³(mat::ParametricMaterial)
-    σ_tot = sum(σₜ(ty, mat.elms[i], E) * N[i] for i in eachindex(c))
+    #N = atoms_per_cm³(mat::ParametricMaterial)
+    σ_tot = sum(σₜ(ty, elm, E) * (atoms_per_g(elm) * mat.massfrac[i] * density(mat)) for (i, elm) in enumerate(mat.elms))
     return 1. / σ_tot
 end
 
@@ -259,7 +270,7 @@ end
 """
 function Base.rand(
     ty::Type{<:ScreenedRutherfordType},
-    mat::Material, #Function
+    mat::Material, 
     E::Float64,
 )::NTuple{3,Float64}
     elm′, λ′ = elements[119], 1.0e308
@@ -278,25 +289,31 @@ function Base.rand(
     num_iterations::Int
     )::NTuple{3,Float64}
     elm′, λ′ = elements[119], 1.0e308
-    #pos=position(pc)
-    #mat_at_pos = density(mat, pos) #massfrac function
-    r = log(rand())
-    thet = rand(ty, elm′, E)
-    phi = 2.0 * π * rand()
-    #=
-    for (i, z) in enumerate(keys(mat_at_pos))
-        l = -λ(ty, mat_at_pos, z, E) * r
-        (elm′, λ′) = l < λ′ ? (z, l) : (elm′, λ′)
+    σ_arr = σₜ_all(ty, mat, E)
+    σ_tot = sum(σ_arr) 
+    rval = rand() * σ_tot
+    for (elm, sigma_val) in zip(mat.elms, σ_arr)
+        rval -= sigma_val
+        if rval ≤ 0
+            elm′ = elm
+            break
+        end
     end
-    =#
+    if elm′ == elements[119]
+        elm′ = mat.elms[end]
+    end
+    θ = rand(ty, elm′, E)
+    ϕ = 2.0 * π * rand()
+
+    r = log(rand())
     λ′ = -λ(ty, position(pc), mat, E) * r
     for i in 1:num_iterations
-        #integral, error = quadgk(x -> -λ(ty, mat(x, thet, phi, pc), E), 0, λ′)
-        integral, error = quadgk(x -> λ(ty, x, mat, thet, phi, pc, E), 0, λ′)
+        integral, error = quadgk(x -> λ(ty, x, mat, θ, ϕ, pc, E), 0, λ′)
         λ′ = - (integral / λ′) * r
     end
+    massfractions(mat, position(Electron(pc, λ′, θ, ϕ, 0.0)))
     #@assert elm′ != elements[119] "Are there any elements in $mat_at_pos?  Is the density ($(mat_at_pos[:Density])) too low?"
-    return (λ′, thet, phi)
+    return (λ′, θ, ϕ)
 end
 
 

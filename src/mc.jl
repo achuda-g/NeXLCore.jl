@@ -93,7 +93,7 @@ function random_point_inside(shape)::Position
     return res
 end
 
-#=
+#= # Glen - moved this to another script
 """
 Particle represents a type that may be simulated using a transport Monte Carlo.  It must provide
 these methods:
@@ -155,59 +155,6 @@ previous(el::Particle) = el.previous
 energy(el::Particle) = el.energy
 =#
 
-#=
-"""
-    discreteregions()::NTuple{4, Vector{Int}}
-
-The function defining the regions visited by an electron in the continuous voxel model. 
-
-Returns the indices of the regions visited, when given a value for `λ` (the mean path length), which extends past the voxel
-boundary, or boundaries, along with the percentage of the trajectory contained within the regions.
-"""
-# function discreteregions(
-#     reg::Voxel,
-#     λ::Float64,
-#     θ::Float64,
-#     ϕ::Float64,
-#     current_idxs::NTuple{3,Int},
-#     pos::Position,
-# )::Dict{Tuple{Int, Int, Int}, Float64}
-#     path_vec = [λ * sin(θ) * cos(ϕ), λ * sin(θ) * sin(ϕ), λ * cos(θ)]
-    
-#     nodevals = reg.parent.nodes
-#     vox_dims = reg.parent.voxel_sizes
-#     vox = current_idxs
-
-#     step = [sign(dir) for dir in path_vec] # pos or negative path along x,y,z
-#     tMax = [((nodevals[vox[i] + max(step[i], 0), i] - pos[i]) / path_vec[i]) for i in 1:3] # adds 1 if travelling positive
-#     tDelta = [vox_dims[i] / abs(path_vec[i]) for i in 1:3] # when line crosses into next voxel along x,y,z
-
-
-#     vox_fracs = Dict{Tuple{Int, Int, Int}, Float64}()
-
-#     while true
-#         #fraction of the total path length within current voxel
-#         t_next = minimum(tMax)
-#         if t_next > 1
-#             t_next = 1
-#         end
-
-#         vox_fracs[Tuple(vox)] = get(vox_fracs, Tuple(vox), 0) + t_next / norm(path_vec) #fraction of total path length in this voxel
-    
-#         # end of the path, break
-#         if t_next == 1
-#             break
-#         end
-    
-#         #or move to the next voxel along the path
-#         dim = argmin(tMax) # dimension of closest voxel
-#         tMax[dim] += tDelta[dim] #increment the tMax value in the dimension found above by tDelta[dim], the fraction of the total path length required to cross a voxel in that dimension. 
-#         vox[dim] += step[dim] # increment voxel index in this dimension, either + or - 1
-#     end
-
-#     return vox_fracs
-# end
-=#
 """
     transport(pc::Electron, mat::Material, ecx=Liljequist1989, bethe=JoyLuo)::NTuple{4, Float64}
     transport(pc::Electron, mat::Material, num_iterations::Int, ecx=Liljequist1989, bethe=JoyLuo)::NTuple{4, Float64}
@@ -232,7 +179,7 @@ function transport( #should work with parametric material now - Glen
     mat::ParametricMaterial,
     num_iterations::Int,
     ecx::Type{<:ElasticScatteringCrossSection} = Liljequist1989,
-    bethe::Type{<:BetheEnergyLoss} = JoyLuo,
+    bethe::Type{<:BetheEnergyLoss} = JoyLuo
 )::NTuple{4,Float64}
     (𝜆′, θ′, ϕ′) = rand(ecx, pc, mat, pc.energy, num_iterations) 
     stopval = dEds(bethe, pc.energy, position(pc), mat)
@@ -447,13 +394,15 @@ function childmost_region(reg::Region, pos::AbstractArray{Float64})::AbstractReg
     res = findfirst(ch -> isinside(ch.shape, pos), reg.children)
     return !isnothing(res) ? childmost_region(reg.children[res], pos) : reg
 end
-function childmost_region(reg::Union{VoxelisedRegion, Voxel}, pos::AbstractArray{Float64})::Union{VoxelisedRegion, Voxel} # in a voxel, the voxelisedregion will be passed here
+# Glen - check if the below is necessary
+function childmost_region(reg::Voxel, pos::AbstractArray{Float64})::Union{VoxelisedRegion, Voxel} # in a voxel, the voxelisedregion will be passed here
     # take_step function determines if the voxel has a parent, if so then the parent is input here
     # from this parent, the child region containing the position is chosen 
     res = findfirst(ch -> isinside(ch.shape, pos), reg.children)
     return !isnothing(res) ? childmost_region(reg.children[res], pos) : reg # res is NOT nothing? child found, pos contained in child.
     # res = nothing? No child contains the position, region input is returned. 
 end
+# Glen - check if the above is necessary
 function childmost_region(reg::AbstractRegion, pos::AbstractArray{Float64})::AbstractRegion # Glen - to deal with the recursive calling of this function 
     if reg isa Region
         return childmost_region(Region(reg), pos)
@@ -463,38 +412,26 @@ function childmost_region(reg::AbstractRegion, pos::AbstractArray{Float64})::Abs
         error("Unsupported region type: ", typeof(reg))
     end
 end
+function childmost_region(reg::VoxelisedRegion, pos::AbstractArray{Float64})::Union{VoxelisedRegion, Voxel}
+    res = findfirst(ch -> isinside(ch.shape, pos), reg.children)
+
+    if !isnothing(res)
+        return childmost_region(reg.children[res], pos)
+    else
+        voxel_indices = find_voxel_by_position(reg, pos)
+        voxel = reg.voxels[voxel_indices...]
+        return voxel
+    end
+end
+
 
 """
     find_voxel_by_position(voxel_boundaries, pos)
 
 Find the next Voxel containing the point `pos`.
 """
-
-# function find_voxel_by_position(nodes, pos) 
-#    xidx = findfirst(x -> pos[1] > x, [nodes[i, 1, 1][1] for i in 1:size(nodes, 1)])
-#    yidx = findfirst(y -> pos[2] > y, [nodes[1, j, 1][2] for j in 1:size(nodes, 2)]) 
-#    zidx = findfirst(z -> pos[3] > z, [nodes[1, 1, k][3] for k in 1:size(nodes, 3)]) 
-#    return (xidx, yidx, zidx) 
-# end
-# function find_voxel_by_position(nodes, pos) 
-#     x_nodes = [nodes[i, 1, 1][1] for i in 1:size(nodes, 1)]
-#     y_nodes = [nodes[1, j, 1][2] for j in 1:size(nodes, 2)]
-#     z_nodes = [nodes[1, 1, k][3] for k in 1:size(nodes, 3)]
-
-#     xidx = findlast(x -> pos[1] >= x, x_nodes)
-#     yidx = findlast(y -> pos[2] >= y, y_nodes)
-#     zidx = findlast(z -> pos[3] >= z, z_nodes)
-
-#     #beyond the last node?
-#     if xidx == nothing || yidx == nothing || zidx == nothing || 
-#        xidx == length(x_nodes) || yidx == length(y_nodes) || zidx == length(z_nodes)
-#         return nothing
-#     else
-#         return (xidx, yidx, zidx) 
-#     end
-# end
 function find_voxel_by_position(vr::VoxelisedRegion, pos) 
-    return ceil.(Int, (pos - vr.shape.origin) ./ vr.voxel_sizes)
+    return ceil.(Int, (pos - vr.shape.origin) ./ vr.voxel_sizes) # returns indices of voxels
 end
 
 """
@@ -520,7 +457,6 @@ function take_step(
         intersection(reg.shape, newP), # Leave this Region?
         (intersection(ch.shape, newP) for ch in reg.children)..., # Enter a new child Region?
     )
-    println(t)
     scatter = t > 1.0
     if !scatter # Enter new region
         newP = T(p, (t + ϵ) * 𝜆, 𝜃, 𝜑, (t + ϵ) * ΔE)
@@ -569,11 +505,11 @@ function take_step(
     ϵ::Float64 = 1.0e-12,
 )::Tuple{T,AbstractRegion,Bool} where {T<:Particle}
     @assert isinside(reg.shape, position(p)) position(p), minimum(reg.shape), maximum(reg.shape)
-    #voxel_idxs = find_voxel_by_position(reg, position(p))
-    #if any(1 .> voxel_idxs .|| voxel_idxs .> reg.num_voxels)
-    #    error()
-    #end
-    #regv = reg.voxels[voxel_idxs...]
+    voxel_idxs = find_voxel_by_position(reg, position(p))
+    if any(1 .> voxel_idxs .|| voxel_idxs .> reg.num_voxels)
+        error()
+    end
+    regv = reg.voxels[voxel_idxs...]
     regv=reg
     take_step(p, regv, 𝜆, 𝜃, 𝜑, ΔE, ϵ)
 end
@@ -592,7 +528,6 @@ Run a single particle trajectory from `p` to `minE` or until the particle exits 
   * `minE` Stopping criterion
   * `terminate` a function taking `T` and `Region` that returns false except on the last step (like `terminate = (pc,r)->pc.energy < 50.0`)
 """
-#=
 function trajectory(
     eval::Function,
     p::T,
@@ -604,9 +539,9 @@ function trajectory(
     θ, ϕ = 0.0, 0.0
     while (!terminate(pc, reg)) && isinside(reg.shape, position(pc))
         prevr = nextr
-        (λ, θₙ, ϕₙ, ΔZ) = scf(pc, nextr.material) # Glen - should this work with a material vector?
+        (λ, θₙ, ϕₙ, ΔZ) = scf(pc, nextr.material) 
         (pc, nextr, scatter) = take_step(pc, nextr, λ, θ, ϕ, ΔZ)
-        (θ, ϕ) = scatter ? (θₙ, ϕₙ) : (0.0, 0.0)
+        (θ, ϕ) = scatter ? (θₙ, ϕₙ) : (0.0, 0.0) # scatter true? New angles. False? Old angles. 
         eval(pc, prevr)
     end
 end
@@ -620,8 +555,6 @@ function trajectory(
     term(pc::T, _::AbstractRegion) = pc.energy < minE
     trajectory(eval, p, reg, scf, term)
 end
-=#
-
 
 function trajectory(
     eval::Function,
@@ -633,11 +566,10 @@ function trajectory(
 ) where {T<:Particle}
     (pc, nextr) = (p, childmost_region(reg, position(p)))
     θ, ϕ = 0.0, 0.0
-    while (!terminate(pc, reg)) && isinside(reg.shape, position(pc)) # still requires being inside a shape
+    while (!terminate(pc, reg)) && isinside(reg.shape, position(pc)) 
         prevr = nextr
-        (λ, θₙ, ϕₙ, ΔZ) = scf(pc, mat, 4) # Glen - should work for parametric material... 
+        (λ, θₙ, ϕₙ, ΔZ) = scf(pc, mat, 4) 
         (pc, nextr, scatter) = take_step(pc, nextr, λ, θ, ϕ, ΔZ)
-        #println(nextr) # nextr is always the chamber.. is this correct? Should be VoxelisedRegion?!
         (θ, ϕ) = scatter ? (θₙ, ϕₙ) : (0.0, 0.0)
         eval(pc, prevr)
     end
@@ -647,9 +579,108 @@ function trajectory(
     p::T,
     reg::AbstractRegion,
     mat::ParametricMaterial,
-    scf::Function = (t::T, mat::ParametricMaterial, num_it::Int) -> transport(t, mat, 4); # 4 is number of integration iterations 
+    scf::Function = (t::T, mat::ParametricMaterial, num_it::Int) -> transport(t, mat, 4); # Adjusted the function definition to include θ, ϕ
     minE::Float64 = 50.0,
 ) where {T<:Particle}
     term(pc::T, _::AbstractRegion) = pc.energy < minE
     trajectory(eval, p, reg, mat, scf, term)
+end
+
+
+# SINGLE FUNCTIONS TO TEST RANDOM PATH LENGTHS
+
+# This isn't working... why?
+# It does all iterations within the region volume, and the regular trajectory function does not, even though nothing is different between them  
+function trajectory_rand_path_check(
+    eval::Function,
+    p::T,
+    reg::AbstractRegion,
+    #total_path_length_vector::Vector{Float64},
+    #scatter_angle_vector::Vector{Float64},
+    scf::Function,
+    terminate::Function,
+) where {T<:Particle}
+    (pc, nextr) = (p, childmost_region(reg, position(p)))
+    θ, ϕ = 0.0, 0.0
+    total_path_length = 0
+    while (!terminate(pc, reg)) && isinside(reg.shape, position(pc)) # isinside function also breaks it?!
+        prevr = nextr
+        (λ, θₙ, ϕₙ, ΔZ) = scf(pc, nextr.material) 
+        (pc, nextr, scatter) = take_step(pc, nextr, λ, θ, ϕ, ΔZ) 
+        total_path_length += λ
+        if !scatter 
+            (θ, ϕ) = (0.0,0.0)
+        else
+            (θ, ϕ) = (θₙ, ϕₙ) 
+            #append!(total_path_length_vector, total_path_length)
+            #append!(scatter_angle_vector, θₙ)
+            #total_path_length = 0
+            break
+        end
+        eval(pc, prevr)
+    end
+    return total_path_length, θ
+end
+
+function trajectory_rand_path_check(
+    eval::Function,
+    p::T,
+    reg::AbstractRegion,
+    #tplv::Vector{Float64},
+    #sav::Vector{Float64},
+    scf::Function = (t::T, mat::Material) -> transport(t, mat); 
+    minE::Float64 = 50.0,
+) where {T<:Particle}
+    term(pc::T, _::AbstractRegion) = pc.energy < minE
+    #trajectory_rand_path_check(eval, p, reg, tplv, sav, scf, term)
+    trajectory_rand_path_check(eval, p, reg, scf, term)
+end
+
+# PARAMETRIC
+
+function trajectory_rand_path_check(
+    eval::Function,
+    p::T,
+    reg::AbstractRegion,
+    mat::ParametricMaterial,
+    #total_path_length_vector::Vector{Float64},
+    #scatter_angle_vector::Vector{Float64},
+    scf::Function,
+    terminate::Function,
+) where {T<:Particle}
+    (pc, nextr) = (p, childmost_region(reg, position(p)))
+    θ, ϕ = 0.0, 0.0
+    total_path_length = 0
+    while (!terminate(pc, reg)) && isinside(reg.shape, position(pc)) 
+        prevr = nextr
+        (λ, θₙ, ϕₙ, ΔZ) = scf(pc, mat, 4) 
+        (pc, nextr, scatter) = take_step(pc, nextr, λ, θ, ϕ, ΔZ)
+        total_path_length += λ
+        if !scatter 
+            (θ, ϕ) = (0.0,0.0)
+        else
+            (θ, ϕ) = (θₙ, ϕₙ) 
+            #append!(total_path_length_vector, total_path_length)
+            #append!(scatter_angle_vector, θₙ)
+            #total_path_length = 0
+            break
+        end
+        eval(pc, prevr)
+    end
+    return total_path_length, θ
+end
+
+function trajectory_rand_path_check(
+    eval::Function,
+    p::T,
+    reg::AbstractRegion,
+    mat::ParametricMaterial,
+    #tplv::Vector{Float64},
+    #sav::Vector{Float64},
+    scf::Function = (t::T, mat::ParametricMaterial, num_it::Int) -> transport(t, mat, 4); # Adjusted the function definition to include θ, ϕ
+    minE::Float64 = 50.0,
+) where {T<:Particle}
+    term(pc::T, _::AbstractRegion) = pc.energy < minE
+    #trajectory_rand_path_check(eval, p, reg, mat, tplv, sav, scf, term)
+    trajectory_rand_path_check(eval, p, reg, mat, scf, term)
 end

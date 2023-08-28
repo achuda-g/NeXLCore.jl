@@ -2,8 +2,8 @@ using StaticArrays
 
 function volume_conserving_density(elms::SVector{N, Element}) where N
     ρ_pure = SVector{N, Float64}(density.(elms))
-    function _density(c)
-        return 1. / sum(c ./ ρ_pure)
+    function _density(c, elms)
+        return 1. / sum(c[i] / ρ_pure[i] for (i, elm) in enumerate(elms))
     end
     return _density
 end
@@ -35,7 +35,9 @@ The mass fraction and atomic weight are immutable but the `Properties` can be mo
 struct ParametricMaterial{T<:AbstractFloat, N}
     name::String
     elms::SVector{N, Element}
-    massfrac::Vector{T}
+    # chane to svector of type T
+    #massfrac::Dict{Element, T}
+    massfrac::MVector{N, T}
     massfracfunc!::Function
     a::SVector{N, T} # Optional: custom atomic weights for the keys in this Material
     ρ::Function
@@ -59,7 +61,7 @@ struct ParametricMaterial{T<:AbstractFloat, N}
     ) where {T<:AbstractFloat}
         N = length(elms)
         elms = SVector{N, Element}(elms) # needed?
-        massfrac = ones(N) ./ N
+        massfrac = isnothing(massfracfunc!) ? MVector{N,T}(ones(T, N)) : MVector{N,T}(rand(T, N))
         if isnothing(ρ)
             ρ = volume_conserving_density(elms)
         end
@@ -76,20 +78,20 @@ struct ParametricMaterial{T<:AbstractFloat, N}
 end
 
 function massfractions(mat::ParametricMaterial, x::AbstractArray)
-    mat.massfracfunc!(mat.massfrac, x)
-    return mat.massfrac
+    mat.massfracfunc!(mat.massfrac, mat.elms, x)
+    return mat.massfrac # outputs dictionary
 end
 
 function density(mat::ParametricMaterial, x::AbstractArray)
     c = massfractions(mat, x)
-    return mat.ρ(c)
+    return mat.ρ(c, mat.elms)
 end
 function density(mat::ParametricMaterial)
-    return mat.ρ(mat.massfrac)
+    return mat.ρ(mat.massfrac, mat.elms)
 end
 
-function atoms_per_cm³(mat::ParametricMaterial)
-    return atoms_per_g.(mat.elms) .* mat.massfrac .* density(mat)
+function atoms_per_cm³(mat::ParametricMaterial) 
+    return sum(atoms_per_g(elm) * mat.massfrac[i] * density(mat) for (i, elm) in enumerate(mat.elms))
 end
 
 """
