@@ -1,10 +1,10 @@
 using Dierckx
+using QuadGK
 
 """
     a₀ : Bohr radius (in cm)
 """
 const a₀ = ustrip(BohrRadius |> u"cm") # 0.529 Å
-
 
 """
     Rₐ(elm::Element)
@@ -12,6 +12,7 @@ const a₀ = ustrip(BohrRadius |> u"cm") # 0.529 Å
 Classic formula for the atomic screening radius in cm
 """
 Rₐ(elm::Element) = a₀ * z(elm)^-0.333333333333
+Rₐ(elm::Vector{Element}) = a₀ .* z(elm)^-0.333333333333
 
 """
 Algorithms implementing the elastic scattering cross-section
@@ -56,7 +57,10 @@ struct Browning1991 <: ScreenedRutherfordType end
 function ξ(::Type{<:ScreenedRutherfordType}, elm::Element, E::Float64)::Float64
     Rₑ, mc² = ustrip((PlanckConstant * SpeedOfLightInVacuum * RydbergConstant) |> u"eV"), ustrip(ElectronMass * SpeedOfLightInVacuum^2 |> u"eV")
     return 0.5 * π * a₀^2 * (4.0 * z(elm) * ((E + mc²) / (E + 2.0 * mc²)) * (Rₑ / E))^2 # As corrected in Liljequist1989
-
+end 
+function ξ(::Type{<:ScreenedRutherfordType}, elm::Vector{Element}, E::Vector{Float64})::Vector{Float64}
+    Rₑ, mc² = ustrip((PlanckConstant * SpeedOfLightInVacuum * RydbergConstant) |> u"eV"), ustrip(ElectronMass * SpeedOfLightInVacuum^2 |> u"eV")
+    return 0.5 * π * a₀^2 * (4.0 .* z.(elm) .* ((E .+ mc²) ./ (E .+ 2.0 .* mc²)) .* (Rₑ ./ E)).^2 # As corrected in Liljequist1989
 end
 
 """
@@ -65,6 +69,10 @@ end
 Screening factor.
 """
 ϵ(::Type{<:ScreenedRutherfordType}, elm::Element, E::Float64) = 2.0 * (kₑ(E) * Rₐ(elm))^2
+ϵ(::Type{<:ScreenedRutherfordType}, elm::Vector{Element}, E::Vector{Float64}) = 2.0 * (kₑ(E) .* Rₐ(elm))^2
+#kₑ just gives e wavenumber ß need to input vector of Es to this 
+# Glen - need to implement this continuously
+
 
 # A spline interpolation based on Liljequist Table III 
 const LiljequistCorrection = begin
@@ -130,7 +138,15 @@ function σₜᵣ(::Type{ScreenedRutherford}, elm::Element, E::Float64)
 end
 function σₜᵣ(::Type{Liljequist1989}, elm::Element, E::Float64)
     return σₜᵣ(ScreenedRutherford, elm, E) / LiljequistCorrection[z(elm)](E)
+end 
+
+function σₜᵣ(::Type{ScreenedRutherford}, elm::Vector{Element}, E::Vector{Float64})
+    ϵv = ϵ(ScreenedRutherford, elm, E)
+    return ξ(ScreenedRutherford, elm, E) .* (log(2.0 .* ϵv .+ 1) .- 2.0 .* ϵv / (2.0 .* ϵv .+ 1.0))
 end
+function σₜᵣ(::Type{Liljequist1989}, elm::Vector{Element}, E::Vector{Float64})
+    return σₜᵣ(ScreenedRutherford, elm, E) ./ LiljequistCorrection[z(elm)](E)
+end 
 
 """
     σₜ(::Type{ScreenedRutherford}, elm::Element, E::Float64)
@@ -146,7 +162,19 @@ function σₜ(::Type{ScreenedRutherford}, elm::Element, E::Float64)
 end
 function σₜ(::Type{Liljequist1989}, elm::Element, E::Float64)
     return σₜ(ScreenedRutherford, elm, E) / LiljequistCorrection[z(elm)](E)
+end 
+
+# Vectorised form of everything
+function σₜ(::Type{ScreenedRutherford},  elm::Vector{Element}, E::Vector{Float64})
+    ϵv = ϵ(ScreenedRutherford, elm, E)
+    return ξ(ScreenedRutherford, elm, E) .* (2.0 .* ϵv^2 ./ (2.0 .* ϵv .+ 1.0))
 end
+function σₜ(::Type{Liljequist1989},  elm::Vector{Element}, E::Vector{Float64})
+    return σₜ(ScreenedRutherford, elm, E) ./ LiljequistCorrection[z(elm)](E)
+end
+
+
+
 function σₜ(::Type{Browning1991}, elm::Element, E::Float64)
     e = 0.001 * E
     u = log10(8.0 * e * z(elm)^-1.33)
@@ -161,6 +189,17 @@ function σₜ(::Type{Browning1994}, elm::Element, E::Float64)
 end
 
 """
+    FOR PARAMETRIC MODEL
+
+"""
+function σₜ_all(ty::Type{<:ScreenedRutherfordType}, mat::ParametricMaterial, E::Float64)
+    return [σₜ(ty, elm, E) * atoms_per_g(elm) * mat.massfrac[i] * density(mat) for (i, elm) in enumerate(mat.elms)]
+end
+
+σₜ(ty::Type{<:ScreenedRutherfordType}, mat::ParametricMaterial, E::Real) = sum(σₜ_all(ty, mat, E))
+
+
+"""
     δσδΩ(::Type{ScreenedRutherford}, θ::Float64, elm::Element, E::Float64)::Float64
 
 The *differential* screened Rutherford cross-section per atom. 
@@ -173,16 +212,48 @@ function δσδΩ(::Type{Liljequist1989}, θ::Float64, elm::Element, E::Float64)
     return σ(ScreenedRutherford, θ, elm, E) / LiljequistCorrection[z(elm)](E)
 end
 
+function δσδΩ(::Type{ScreenedRutherford}, θ::Float64, elm::Vector{Element}, E::Vector{Float64})::Vector{Float64}
+    return ξ(ScreenedRutherford, elm, E) *
+           (1.0 .- cos(θ) .+ ϵ(ScreenedRutherford, elm, E)^-1)^-2
+end
+function δσδΩ(::Type{Liljequist1989}, θ::Float64, elm::Vector{Element}, E::Vector{Float64})::Vector{Float64}
+    return σ(ScreenedRutherford, θ, elm, E) ./ LiljequistCorrection[z(elm)](E)
+end
+
 """
     λ(ty::Type{<:ElasticScatteringCrossSection}, θ::Float64, elm::Element, E::Float64)::Float64
 
 The mean free path.  The mean distance between elastic scattering events. 
 """
 function λ(ty::Type{<:ScreenedRutherfordType}, elm::Element, E::Float64, N::Float64)
-    return (σₜ(ty, elm, E) * N)^-1
+    return (σₜ(ty, elm, E) * N)^-1 
 end
 function λ(ty::Type{<:ScreenedRutherfordType}, mat::Material, elm::Element, E::Float64)
-    return λ(ty, elm, E, atoms_per_cm³(mat, elm))
+    return λ(ty, elm, E, atoms_per_cm³(mat, elm)) 
+end
+#=
+function λ(ty::Type{<:ScreenedRutherfordType}, mat::Function, E::Float64)
+    for (i, z) in enumerate(keys(mat))
+        l = -λ(ty, mat, z, E) * log(r)
+        (elm′, λ′) = l < λ′ ? (z, l) : (elm′, λ′)
+    end
+    return λ′
+end
+=#
+function λ(ty::Type{<:ScreenedRutherfordType}, mfp::Float64, mat::ParametricMaterial, θ′::Float64, ϕ′::Float64, pc::Electron, E::Float64)
+    pos = position(Electron(pc, mfp, θ′, ϕ′, E)) #ToDo: Optimise this
+    c = massfractions(mat, pos)
+    ρ = density(mat)
+    #N = atoms_per_cm³(mat::ParametricMaterial)
+    σ_tot = sum(σₜ(ty, elm, E) * (atoms_per_g(elm) * mat.massfrac[i] * density(mat)) for (i, elm) in enumerate(mat.elms))
+    return 1. / σ_tot
+end
+function λ(ty::Type{<:ScreenedRutherfordType}, pos::AbstractVector, mat::ParametricMaterial, E::Float64)
+    c = massfractions(mat, pos)
+    ρ = density(mat)
+    #N = atoms_per_cm³(mat::ParametricMaterial)
+    σ_tot = sum(σₜ(ty, elm, E) * (atoms_per_g(elm) * mat.massfrac[i] * density(mat)) for (i, elm) in enumerate(mat.elms))
+    return 1. / σ_tot
 end
 
 
@@ -199,7 +270,7 @@ end
 """
 function Base.rand(
     ty::Type{<:ScreenedRutherfordType},
-    mat::Material,
+    mat::Material, 
     E::Float64,
 )::NTuple{3,Float64}
     elm′, λ′ = elements[119], 1.0e308
@@ -210,6 +281,41 @@ function Base.rand(
     @assert elm′ != elements[119] "Are there any elements in $mat?  Is the density ($(mat[:Density])) too low?"
     return (λ′, rand(ty, elm′, E), 2.0 * π * rand())
 end
+function Base.rand(
+    ty::Type{<:ScreenedRutherfordType},
+    pc::Electron,
+    mat::ParametricMaterial, #Material is a function
+    E::Float64,
+    num_iterations::Int
+    )::NTuple{3,Float64}
+    elm′, λ′ = elements[119], 1.0e308
+    σ_arr = σₜ_all(ty, mat, E)
+    σ_tot = sum(σ_arr) 
+    rval = rand() * σ_tot
+    for (elm, sigma_val) in zip(mat.elms, σ_arr)
+        rval -= sigma_val
+        if rval ≤ 0
+            elm′ = elm
+            break
+        end
+    end
+    if elm′ == elements[119]
+        elm′ = mat.elms[end]
+    end
+    θ = rand(ty, elm′, E)
+    ϕ = 2.0 * π * rand()
+
+    r = log(rand())
+    λ′ = -λ(ty, position(pc), mat, E) * r
+    for i in 1:num_iterations
+        integral, error = quadgk(x -> λ(ty, x, mat, θ, ϕ, pc, E), 0, λ′)
+        λ′ = - (integral / λ′) * r
+    end
+    massfractions(mat, position(Electron(pc, λ′, θ, ϕ, 0.0)))
+    #@assert elm′ != elements[119] "Are there any elements in $mat_at_pos?  Is the density ($(mat_at_pos[:Density])) too low?"
+    return (λ′, θ, ϕ)
+end
+
 
 """
     λₜᵣ(ty::Type{<:ElasticScatteringCrossSection}, θ::Float64, elm::Element, E::Float64)::Float64

@@ -5,6 +5,7 @@ using Reexport
 using LinearAlgebra
 using DataFrames
 using DataDeps, Downloads
+using StaticArrays
 
 @reexport using PeriodicTable
 @reexport using NeXLUncertainties
@@ -136,8 +137,10 @@ export comptonEnergy # Computes the resulting Compton-shifted X-ray energy
 export comptonDifferential # Computes the differential Compton cross-section
 
 include("material.jl")
+include("parametricmaterial.jl")
 include("matparser.jl")
 export material # Construct a Material struct
+export ParametricMaterial
 export pure # Construct a pure element material
 export massfraction # Returns the composition as mass fraction
 export atomicfraction # Returns the composition as atom fraction
@@ -295,7 +298,7 @@ include("mchelpers.jl")
 export Position, previous # Base.position
 export Particle, Electron
 export RectangularShape, SphericalShape # aliases for 3D GeometryBasics shapes
-export Region # A shape and a material
+export Region, VoxelisedRegion, Voxel # A shape and a material
 export scatter # The Particle transport function 
 export gun # A source of starter Particle objects
 export trajectory # Calculates Point and Region pairs as the Particle traverses the sample
