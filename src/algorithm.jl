@@ -299,3 +299,23 @@ ionizationcrosssection(
 ) = ionizationcrosssection(z, ss, energy, ty==DefaultAlgorithm ? Bote2009 : ty)
 
 
+# A Singleton Type For N-point Gauss Legendre Quadrature
+struct GLQ{N} end
+
+"""
+    quadrature(::Type{GLQ{N}}) where N
+    quadrature(N::Integer)
+
+Get Integrator `quad(f, a, b)` that performs `N`-point Gauss Legendre quadrature of `f` from `a` to `b`.
+"""
+function quadrature(::Type{GLQ{N}}) where N
+    (xp, w) = gausslegendre(N)
+    function integrator(f, a, b)
+        h = 0.5 * (b - a)
+        m = 0.5 * (b + a)
+        x = m .+ xp .* h
+        return sum(f.(x) .* w) * h
+    end
+    return integrator
+end
+quadrature(n::Integer) = quadrature(FastGLQ{n})

@@ -2,10 +2,13 @@ module NeXLCore
 
 using Requires
 using Reexport
+using Logging
 using LinearAlgebra
 using DataFrames
 using DataDeps, Downloads
 using StaticArrays
+using Tullio
+using DataStructures
 
 @reexport using PeriodicTable
 @reexport using NeXLUncertainties
@@ -137,7 +140,7 @@ export comptonEnergy # Computes the resulting Compton-shifted X-ray energy
 export comptonDifferential # Computes the differential Compton cross-section
 
 include("material.jl")
-include("parametricmaterial.jl")
+include("material2.jl")
 include("matparser.jl")
 export material # Construct a Material struct
 export ParametricMaterial
@@ -160,6 +163,9 @@ export atoms_per_cm³ # Returns the number of atoms in one cm² of the Material
 export atoms_per_g # Returns the number of atoms in one gram of the Material
 export @mat_str
 export delete # Create a new Material with certain elements removed
+export MaterialTemplate
+export STemplateMaterial
+export MTemplateMaterial, MTemplateMaterialSingle, MTemplateMaterialThreaded
 
 include("film.jl")
 export Film # A thin film of Material
@@ -294,9 +300,10 @@ export Log3BandC, Log3Band, LogScale, LinearScale # Converts [0.0,1.0] to a colo
 export loadlegend # Load a legend for one of the above scales
 
 include("mc.jl")
+include("mc2.jl")
 include("mchelpers.jl")
 export Position, previous # Base.position
-export Particle, Electron
+export Particle, Electron, MutableParticle, MElectron
 export RectangularShape, SphericalShape # aliases for 3D GeometryBasics shapes
 export Region, VoxelisedRegion, Voxel # A shape and a material
 export scatter # The Particle transport function 
@@ -304,7 +311,8 @@ export gun # A source of starter Particle objects
 export trajectory # Calculates Point and Region pairs as the Particle traverses the sample
 export intersection # Compute how far along a ray, the ray intersects a shape.
 export chamber, particle, bulk, thin_film, coated_particle
-export colorize # Maps Material to Color for all Material in a Region
+export colorize # Maps Material to Color for all Material in a region
+export trajectory2, transporter
 
 include("staging.jl")
 export StageMapping, DefaultStageMapping

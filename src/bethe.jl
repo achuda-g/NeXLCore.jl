@@ -6,7 +6,7 @@ using GeometryBasics: Point, Rect3, Sphere, GeometryPrimitive, origin, widths, r
 """
 const Position = Point{3,Float64} # Glen - moved here from mc.jl
 
-"""
+#="""
 Particle represents a type that may be simulated using a transport Monte Carlo.  It must provide
 these methods:
 
@@ -65,6 +65,8 @@ Base.show(io::IO, el::Electron) = print(io, "Electron[$(position(el)), $(energy(
 Base.position(el::Particle) = el.current
 previous(el::Particle) = el.previous
 energy(el::Particle) = el.energy
+=#
+
 # Energy loss expressions
 """
 An abstract type to describe kinetic energy loss by electrons. 
@@ -84,24 +86,24 @@ struct JoyLuo <: BetheEnergyLoss end
 
 """
     dEds(::Type{<:BetheEnergyLoss}, e::Float64, elm::Element, ρ::Float64; mip::Type{<:NeXLMeanIonizationPotential}=Berger1982)
-    dEds(::Type{<:BetheEnergyLoss}, e::Float64, mat::Material, inclDensity=true; mip::Type{<:NeXLMeanIonizationPotential}=Berger1982)
+    dEds(::Type{<:BetheEnergyLoss}, e::Float64, mat::AbstractMaterial, inclDensity=true; mip::Type{<:NeXLMeanIonizationPotential}=Berger1982)
 
 Calculate the loss per unit path length for an electron in the specified element and density.  The results in energy
 loss in eV/Å.  Implemented by `Type{Bethe}` and `Type{JoyLuo}`.
 """
 dEds(
     ::Type{Bethe},
-    e::Float64,
+    e::Real,
     elm::Element,
-    ρ::Float64,
+    ρ::Real,
     mip::Type{<:NeXLMeanIonizationPotential} = Berger1982,
 ) = (-785.0e8 * ρ * z(elm)) / (a(elm) * e) * log(1.166e / J(mip, elm))
 
 function dEds(
     ::Type{JoyLuo},
-    e::Float64,
+    e::Real,
     elm::Element,
-    ρ::Float64,
+    ρ::Real,
     mip::Type{<:NeXLMeanIonizationPotential} = Berger1982,
 )
     # Zero allocation
@@ -112,54 +114,35 @@ function dEds(
 end
 function dEds(
     ty::Type{<:BetheEnergyLoss},
-    e::Float64,
-    mat::Material,
+    e::Real,
+    mat::AbstractMaterial,
     mip::Type{<:NeXLMeanIonizationPotential} = Berger1982,
 )
     ρ = density(mat)
-    return sum(keys(mat)) do el
+    return sum(elms(mat)) do el
         dEds(ty, e, el, ρ, mip) * mat[el]
     end
 end
 function dEds(
     ty::Type{<:BetheEnergyLoss},
-    e::Float64,
-    pos::AbstractVector,
-    mat::ParametricMaterial,
+    e::Real,
+    mat::VectorizedMaterial,
     mip::Type{<:NeXLMeanIonizationPotential} = Berger1982,
 )
-    ρ = density(mat, pos)
-
-    return sum(enumerate(mat.elms)) do (i, el)
-        dEds(ty, e, el, ρ, mip) * mat.massfrac[i]
+    ρ = density(mat)
+    return sum(eachindex(mat)) do i
+        dEds(ty, e, elm_nocheck(mat, i), ρ, mip) * massfrac(mat, i)
     end
 end
 
-function dEds(
-    ty::Type{<:BetheEnergyLoss},
-    e::Float64,
-    mat::ParametricMaterial,
-    mfp::Float64,
-    θ′::Float64,
-    ϕ′::Float64,
-    pc::Electron,
-    mip::Type{<:NeXLMeanIonizationPotential} = Berger1982,
-)
-    pos = position(Electron(pc, mfp, θ′, ϕ′, 0.0)) #ToDo: Optimise this
-    c = massfractions(mat, pos)
-    ρ = density(mat, pos)
-
-    return sum(dEds(ty, e, elm, ρ, mip) * mat.massfrac[i] for (i, elm) in enumerate(mat.elms))
-end
-
 """
-    range(::Type{BetheEnergyLoss}, mat::Material, e0::Float64, inclDensity = true)
+    range(::Type{BetheEnergyLoss}, mat::AbstractMaterial, e0::Float64, inclDensity = true)
 
 Calculates the electron range using numeric quadrature of a BetheEnergyLoss algorithm.
 """
 Base.range(
     ty::Type{<:BetheEnergyLoss},
-    mat::Material,
+    mat::AbstractMaterial,
     e0::Float64,
     inclDensity = true;
     emin = 50.0,
@@ -171,13 +154,18 @@ Base.range(
 struct Kanaya1972 end
 
 """
-    range(::Type{Kanaya1972}, mat::Material, e0::Float64, inclDensity = true)
+    range(::Type{Kanaya1972}, mat::AbstractMaterial, e0::Float64, inclDensity = true)
 
 Calculates the Kanaya-Okayama electron range.
 Kanaya K, Okayama S (1972) Penetration and energy-loss theory of electrons in solid targets. J Appl Phys 5:43
 """
-function Base.range(::Type{Kanaya1972}, mat::Material, e0::Float64, inclDensity = true)
+function Base.range(::Type{Kanaya1972}, mat::AbstractMaterial, e0::Float64, inclDensity = true)
     ko(elm, e0) = 0.0276 * a(elm) * (0.001 * e0)^1.67 / z(elm)^0.89
-    return (1.0e-4 / mapreduce(elm -> mat[elm] / ko(elm, e0), +, keys(mat))) /
+    return (1.0e-4 / mapreduce(elm -> mat[elm] / ko(elm, e0), +, elms(mat))) /
+           (inclDensity ? density(mat) : 1.0)
+end
+function Base.range(::Type{Kanaya1972}, mat::VectorizedMaterial, e0::Float64, inclDensity = true)
+    ko(elm, e0) = 0.0276 * a(elm) * (0.001 * e0)^1.67 / z(elm)^0.89
+    return (1.0e-4 / sum(i -> massfrac(mat, i) / ko(elm_nocheck(mat, i), e0), eachindex(mat))) /
            (inclDensity ? density(mat) : 1.0)
 end

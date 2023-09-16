@@ -27,14 +27,14 @@ If the ray from `pos0` towards `pos2` does not intersect `r` then this function 
 """
 const RectangularShape = Rect3{Float64}
 
-isinside(rr::RectangularShape, pos::AbstractArray{Float64}) =
+isinside(rr::RectangularShape, pos::AbstractArray{<:Real}) =
     all(pos .> minimum(rr)) && all(pos .< maximum(rr)) # write for voxels i, i + 1
 
 function intersection(
     rr::RectangularShape,
-    pos1::AbstractArray{Float64},
-    pos2::AbstractArray{Float64},
-)::Float64
+    pos1::AbstractArray{<:Real},
+    pos2::AbstractArray{<:Real},
+)
     _between(a, b, c) = (a > b) && (a < c)
     t = Inf64
     corner1, corner2 = minimum(rr), maximum(rr)
@@ -62,14 +62,14 @@ end
 
 const SphericalShape = Sphere{Float64}
 
-isinside(sr::SphericalShape, pos::AbstractArray{Float64}) =
+isinside(sr::SphericalShape, pos::AbstractArray{<:Real}) =
     norm(pos .- origin(sr)) < radius(sr)
 
 function intersection(
     sr::SphericalShape,
-    pos0::AbstractArray{Float64},
-    pos1::AbstractArray{Float64},
-)::Float64
+    pos0::AbstractArray{<:Real},
+    pos1::AbstractArray{<:Real},
+)
     d, m = pos1 .- pos0, pos0 .- origin(sr)
     ma2, b = -2.0 * dot(d, d), 2.0 * dot(m, d)
     f = b^2 + ma2 * 2.0 * (dot(m, m) - radius(sr)^2)
@@ -85,7 +85,7 @@ end
 
 Generate a randomized point that is guaranteed to be in the interior of the shape.
 """
-function random_point_inside(shape)::Position
+function random_point_inside(shape)
     res = Position(origin(shape) .+ rand(Position) .* widths(shape))
     while !isinside(shape, res)
         res = Position(origin(shape) .+ rand(Position) .* widths(shape))
@@ -93,7 +93,7 @@ function random_point_inside(shape)::Position
     return res
 end
 
-#= # Glen - moved this to another script
+# Glen - moved this to another script ? Where
 """
 Particle represents a type that may be simulated using a transport Monte Carlo.  It must provide
 these methods:
@@ -119,7 +119,7 @@ abstract type Particle end
 struct Electron <: Particle
     previous::Position
     current::Position
-    energy::Float64 # eV
+    energy::Real # eV
 
     """
         Electron(prev::Position, curr::Position, energy::Float64)
@@ -128,10 +128,10 @@ struct Electron <: Particle
     Create a new `Electron` from this one in which the new `Electron` is a distance `𝜆` from the
     first along a trajectory that is `𝜃` and `𝜑` off the current trajectory.
     """
-    Electron(prev::AbstractArray{Float64}, curr::AbstractArray{Float64}, energy::Float64) =
+    Electron(prev::AbstractArray{<:Real}, curr::AbstractArray{<:Real}, energy::Real) =
         new(prev, curr, energy)
 
-    function Electron(el::Electron, 𝜆::Float64, 𝜃::Float64, 𝜑::Float64, ΔE::Float64)
+    function Electron(el::Electron, 𝜆::Real, 𝜃::Real, 𝜑::Real, ΔE::Real)
         (u, v, w) = LinearAlgebra.normalize(position(el) .- previous(el))
         sc =
             1.0 - abs(w) > 1.0e-8 ? #
@@ -151,13 +151,14 @@ end
 
 Base.show(io::IO, el::Electron) = print(io, "Electron[$(position(el)), $(energy(el)) eV]")
 Base.position(el::Particle) = el.current
+current(el::Particle) = position(el)
 previous(el::Particle) = el.previous
 energy(el::Particle) = el.energy
-=#
+direction(el::Particle) = direction(position(el), previous(el))
+
 
 """
-    transport(pc::Electron, mat::Material, ecx=Liljequist1989, bethe=JoyLuo)::NTuple{4, Float64}
-    transport(pc::Electron, mat::Material, num_iterations::Int, ecx=Liljequist1989, bethe=JoyLuo)::NTuple{4, Float64}
+    transport(pc::Electron, mat::ParametricMaterial, ecx=Liljequist1989, bethe=JoyLuo)::NTuple{4, Float64}
 
 The default function defining elastic scattering and energy loss for an Electron.
 
@@ -166,29 +167,12 @@ angle and `ΔE` is the energy loss for transport over the distance `λ`. 'Num_it
 """
 function transport(
     pc::Electron,
-    mat::Material, #Function - elements fixed with mass fractions changing
-    ecx::Type{<:ElasticScatteringCrossSection} = Liljequist1989,
-    bethe::Type{<:BetheEnergyLoss} = JoyLuo,
-)::NTuple{4,Float64}
+    mat::AbstractMaterial; #Function - elements fixed with mass fractions changing
+    ecx::Type{<:ElasticScatteringCrossSection}=Liljequist1989,
+    bethe::Type{<:BetheEnergyLoss}=JoyLuo,
+)
     (𝜆′, θ′, ϕ′) = rand(ecx, mat, pc.energy) 
     return (𝜆′, θ′, ϕ′, 𝜆′ * dEds(bethe, pc.energy, mat))
-end
-
-function transport( #should work with parametric material now - Glen 
-    pc::Electron,
-    mat::ParametricMaterial,
-    num_iterations::Int,
-    ecx::Type{<:ElasticScatteringCrossSection} = Liljequist1989,
-    bethe::Type{<:BetheEnergyLoss} = JoyLuo
-)::NTuple{4,Float64}
-    (𝜆′, θ′, ϕ′) = rand(ecx, pc, mat, pc.energy, num_iterations) 
-    stopval = dEds(bethe, pc.energy, position(pc), mat)
-    for i in 1:num_iterations
-        integral, error = quadgk(x -> dEds(bethe, pc.energy, mat, x, θ′, ϕ′, pc), 0, 𝜆′)
-        stopping_val = integral / stopval 
-        stopval = stopping_val
-    end
-    return (𝜆′, θ′, ϕ′, 𝜆′ * stopval)
 end
 
 """
@@ -208,141 +192,21 @@ A `Region` combines a geometric primative and a `Material` (with `:Density` prop
 """
 
 abstract type AbstractRegion{M} end
+material(reg::AbstractRegion) = reg.material
+shape(reg::AbstractRegion) = reg.shape
+parent(reg::AbstractRegion) = reg.parent
+children(reg::AbstractRegion) = reg.children
+name(reg::AbstractRegion) = reg.name
 
-struct VoxelShape
-    index::NTuple
-    parent::AbstractRegion
-end
+"""
+    findregion(pos::AbstractVector, reg::AbstractRegion)
 
-struct Voxel{M} <: AbstractRegion{M}
-    shape::VoxelShape
-    material::M
-    parent::AbstractRegion
-    children::Vector{Nothing}
-    #name::String
-
-    function Voxel(
-        index::NTuple,
-        mat::M,
-        parent::AbstractRegion,
-        #name::String = "",
-    ) where {M<:Material}
-        @assert mat[:Density] > 0.0
-        #name = name * "$index"
-        shape = VoxelShape(index, parent)
-        return new{M}(shape, mat, parent, Vector{Nothing}()) # Glen - nothing in children region
-    end
-end
-
-function rect(vx::VoxelShape)
-    i, j, k = vx.index
-    RectangularShape(nodes(vx.parent, i, j, k), vx.parent.voxel_sizes)
-end
-
-function isinside(vx::VoxelShape, pos::AbstractArray{Float64})
-    all(pos .> nodes(vx.parent, i, j, k)) && all(pos .< nodes(vx.parent, i+1, j+1, k+1)) # write for voxels i, i + 1
-end
-
-function intersection( # how to make this more efficient? 
-    vx::VoxelShape,
-    pos1::AbstractArray{Float64},
-    pos2::AbstractArray{Float64},
-)::Float64
-    _between(a, b, c) =  b < a < c #(a > b) && (a < c)
-    t = Inf64
-    i, j, k = vx.index
-    #corner1, corner2 = vx.parent.nodes[i,j,k], vx.parent.nodes[i+1,j+1,k+1] # is this correct?
-    corner1, corner2 = nodes(vx.parent, i,j,k), nodes(vx.parent, i+1,j+1,k+1) # is this correct?
-    for i in eachindex(pos1)
-        j, k = i % 3 + 1, (i + 1) % 3 + 1
-        if pos2[i] != pos1[i]
-            u = (corner1[i] - pos1[i]) / (pos2[i] - pos1[i])
-            if (u > 0.0) && (u <= t)
-                t = u
-            end
-            u = (corner2[i] - pos1[i]) / (pos2[i] - pos1[i])
-            if (u > 0.0) && (u <= t)
-                t = u
-            end
-        end
-    end
-    return t
-end
-
-struct VoxelisedRegion{M} <: AbstractRegion{M}
-    shape::GeometryPrimitive{3, Float64}
-    parent::Union{Nothing, AbstractRegion}
-    children::Vector{AbstractRegion}
-    material::M
-    voxels::Array{Voxel, 3}
-    nodes::Vector{Vector{Float64}}
-    name::String
-    voxel_sizes::NTuple{3, Float64}
-    num_voxels::Tuple{Int64, Int64, Int64}
-
-    function VoxelisedRegion(
-        sh::RectangularShape,
-        mat::M,
-        mat_func::Function,
-        parent::Union{Nothing,AbstractRegion},
-        num_voxels::Tuple{Int64, Int64, Int64},
-        name::Union{Nothing,String} = nothing,
-    ) where M
-        name = something(
-            name,
-            isnothing(parent) ? "Root" : "$(parent.name)[$(length(parent.children)+1)]",
-        )
-
-        voxel_sizes = (sh.widths[1] / num_voxels[1], sh.widths[2] / num_voxels[2], sh.widths[3] / num_voxels[3])
-
-        #nodes = [(sh.origin[1] + i * voxel_sizes[1], 
-        #sh.origin[2] + j * voxel_sizes[2], 
-        #sh.origin[3] + k * voxel_sizes[3] ) for i in 0:num_voxels[1], j in 0:num_voxels[2], k in 0:num_voxels[3]]
-        nodes = [sh.origin[i] .+ collect(0:num_voxels[i]) .* voxel_sizes[i] for i in 1:3]
-        
-        voxels = Array{Voxel}(undef, num_voxels[1], num_voxels[2], num_voxels[3])
-        res = new{M}(sh, parent, Vector{AbstractRegion}(), mat, voxels, nodes, name, voxel_sizes, num_voxels)
-
-        for i in 1:num_voxels[1]
-            for j in 1:num_voxels[2]
-                for k in 1:num_voxels[3]
-                    pos = Position(nodes[1][i] + nodes[1][i+1], nodes[2][j] + nodes[2][j+1], nodes[3][k] + nodes[3][k+1]) .* 0.5
-                    voxels[i, j, k] = Voxel((i, j, k), mat_func(pos), res)
-                end
-            end
-        end
-
-        if !isnothing(parent)
-	    tolerance = eps(Float64)
-	    vertices = [
-    		sh.origin + Point(tolerance, tolerance, tolerance),
-    		sh.origin + Point(0, 0, sh.widths[3]) - Point(0, 0, tolerance) + Point(tolerance, tolerance, 0),
-    		sh.origin + Point(0, sh.widths[2], 0) - Point(0, tolerance, 0) + Point(tolerance, 0, tolerance),
-    		sh.origin + Point(0, sh.widths[2], sh.widths[3]) - Point(0, tolerance, tolerance) + Point(tolerance, 0, 0),
-    		sh.origin + Point(sh.widths[1], 0, 0) - Point(tolerance, 0, 0) + Point(0, tolerance, tolerance),
-    		sh.origin + Point(sh.widths[1], 0, sh.widths[3]) - Point(tolerance, 0, tolerance) + Point(0, tolerance, 0),
-    		sh.origin + Point(sh.widths[1], sh.widths[2], 0) - Point(tolerance, tolerance, 0) + Point(0, 0, tolerance),
-    		sh.origin + Point(sh.widths[1], sh.widths[2], sh.widths[3]) - Point(tolerance, tolerance, tolerance),
-	    ]
-	    @assert all(isinside(parent.shape, v) for v in vertices) "The child $sh is not fully contained within the parent $(parent.shape)."
-
-	    @assert all(
-    		ch -> all(!isinside(ch.shape, v) for v in vertices),
-    		parent.children,
-	    ) "The child $sh overlaps a child of the parent shape."
-
-	    push!(parent.children, res)
-        else
-        end
-        return res
-    end
-end
-
-nodes(vr::VoxelisedRegion, i::Integer, j::Integer, k::Integer) = (vr.nodes[1][i], vr.nodes[2][j], vr.nodes[3][k])
-    
+Find the region containing the point `pos` where `reg` is the region it is likely at or was previously at.
+"""
+findregion(pos::AbstractVector, reg::AbstractRegion) = childmost_region(reg::Region, pos::AbstractArray{<:Real})
 
 struct Region{M} <: AbstractRegion{M}
-    shape::GeometryPrimitive{3,Float64}
+    shape::GeometryPrimitive{3, <:AbstractFloat}
     material::M
     parent::Union{Nothing,AbstractRegion}
     children::Vector{AbstractRegion}
@@ -390,49 +254,18 @@ Base.show(io::IO, reg::Region) = print(
 
 Find the inner-most `Region` within `reg` containing the point `pos`.
 """
-function childmost_region(reg::Region, pos::AbstractArray{Float64})::AbstractRegion
-    res = findfirst(ch -> isinside(ch.shape, pos), reg.children)
-    return !isnothing(res) ? childmost_region(reg.children[res], pos) : reg
-end
-# Glen - check if the below is necessary
-function childmost_region(reg::Voxel, pos::AbstractArray{Float64})::Union{VoxelisedRegion, Voxel} # in a voxel, the voxelisedregion will be passed here
-    # take_step function determines if the voxel has a parent, if so then the parent is input here
-    # from this parent, the child region containing the position is chosen 
-    res = findfirst(ch -> isinside(ch.shape, pos), reg.children)
-    return !isnothing(res) ? childmost_region(reg.children[res], pos) : reg # res is NOT nothing? child found, pos contained in child.
-    # res = nothing? No child contains the position, region input is returned. 
-end
-# Glen - check if the above is necessary
-function childmost_region(reg::AbstractRegion, pos::AbstractArray{Float64})::AbstractRegion # Glen - to deal with the recursive calling of this function 
-    if reg isa Region
-        return childmost_region(Region(reg), pos)
-    elseif reg isa VoxelisedRegion || reg isa Voxel
-        return childmost_region(Union{VoxelisedRegion, Voxel}(reg), pos)
-    else
-        error("Unsupported region type: ", typeof(reg))
-    end
-end
-function childmost_region(reg::VoxelisedRegion, pos::AbstractArray{Float64})::Union{VoxelisedRegion, Voxel}
-    res = findfirst(ch -> isinside(ch.shape, pos), reg.children)
-
-    if !isnothing(res)
-        return childmost_region(reg.children[res], pos)
-    else
-        voxel_indices = find_voxel_by_position(reg, pos)
-        voxel = reg.voxels[voxel_indices...]
-        return voxel
-    end
+function childmost_region(reg::AbstractRegion, pos::AbstractArray{<:Real})::AbstractRegion
+    res = findfirst(ch -> isinside(shape(ch), pos), children(reg))
+    return !isnothing(res) ? childmost_region(children(reg)[res], pos) : reg
 end
 
-
-"""
-    find_voxel_by_position(voxel_boundaries, pos)
-
-Find the next Voxel containing the point `pos`.
-"""
-function find_voxel_by_position(vr::VoxelisedRegion, pos) 
-    return ceil.(Int, (pos - vr.shape.origin) ./ vr.voxel_sizes) # returns indices of voxels
+function intersection(reg::AbstractRegion, pos1::AbstractArray{<:Real}, pos2::AbstractArray{<:Real})
+    t1 = intersection(shape(reg), pos1, pos2)
+    t2 = minimum(ch -> intersection(ch, pos1, pos2), children(reg))
+    return min(t1, t2)
 end
+
+isinside(reg::AbstractRegion, pos::AbstractArray{<:Real}) = isinside(shape(reg), pos)
 
 """
     take_step(p::T, reg::Region, 𝜆::Float64, 𝜃::Float64, 𝜑::Float64)::Tuple{T, Region, Bool} where { T<: Particle}
@@ -446,72 +279,23 @@ Returns the updated `Particle` reflecting the last trajectory step and the Regio
 function take_step(
     p::T,
     reg::Region,
-    𝜆::Float64,
-    𝜃::Float64,
-    𝜑::Float64,
-    ΔE::Float64,
-    ϵ::Float64 = 1.0e-12,
-)::Tuple{T,AbstractRegion,Bool} where {T<:Particle}
+    𝜆::Real,
+    𝜃::Real,
+    𝜑::Real,
+    ΔE::Real,
+    ϵ::Real = 1.0e-12,
+) where {T<:Particle}
     newP, nextReg = T(p, 𝜆, 𝜃, 𝜑, ΔE), reg
     t = min(
-        intersection(reg.shape, newP), # Leave this Region?
-        (intersection(ch.shape, newP) for ch in reg.children)..., # Enter a new child Region?
+        intersection(shape(reg), newP), # Leave this Region?
+        (intersection(shape(ch), newP) for ch in children(reg))..., # Enter a new child Region?
     )
     scatter = t > 1.0
     if !scatter # Enter new region
         newP = T(p, (t + ϵ) * 𝜆, 𝜃, 𝜑, (t + ϵ) * ΔE)
-        nextReg = childmost_region(isnothing(reg.parent) ? reg : reg.parent, position(newP))
+        nextReg = childmost_region(isnothing(parent(reg)) ? reg : parent(reg), position(newP))
     end
     return (newP, nextReg, scatter)
-end
-
-function take_step(
-    p::T,
-    reg::Voxel,
-    𝜆::Float64,
-    𝜃::Float64,
-    𝜑::Float64,
-    ΔE::Float64,
-    ϵ::Float64 = 1.0e-12,
-)::Tuple{T,AbstractRegion,Bool} where {T<:Particle}
-    newP, nextReg = T(p, 𝜆, 𝜃, 𝜑, ΔE), reg
-    t = min(
-        intersection(reg.shape, newP),
-        (intersection(ch.shape, newP) for ch in reg.children)...,
-    )
-    scatter = t > 1.0
-    if !scatter
-        newP = T(p, (t + ϵ) * 𝜆, 𝜃, 𝜑, (t + ϵ) * ΔE)
-        if isa(nextReg, Voxel)
-            voxel_idxs = find_voxel_by_position(nextReg.parent, position(newP))
-            if all(1 .<= voxel_idxs .<= nextReg.parent.num_voxels)
-                nextReg = nextReg.parent.voxels[voxel_idxs...] 
-            else
-                vr = nextReg.parent
-                nextReg = childmost_region(isnothing(vr.parent) ? nothing : vr.parent, position(newP)) #could return nothing
-            end
-        end
-    end
-    return (newP, nextReg, scatter)
-end
-
-function take_step(
-    p::T,
-    reg::VoxelisedRegion,
-    𝜆::Float64,
-    𝜃::Float64,
-    𝜑::Float64,
-    ΔE::Float64,
-    ϵ::Float64 = 1.0e-12,
-)::Tuple{T,AbstractRegion,Bool} where {T<:Particle}
-    @assert isinside(reg.shape, position(p)) position(p), minimum(reg.shape), maximum(reg.shape)
-    voxel_idxs = find_voxel_by_position(reg, position(p))
-    if any(1 .> voxel_idxs .|| voxel_idxs .> reg.num_voxels)
-        error()
-    end
-    regv = reg.voxels[voxel_idxs...]
-    regv=reg
-    take_step(p, regv, 𝜆, 𝜃, 𝜑, ΔE, ϵ)
 end
 
 
@@ -537,7 +321,7 @@ function trajectory(
 ) where {T<:Particle}
     (pc, nextr) = (p, childmost_region(reg, position(p)))
     θ, ϕ = 0.0, 0.0
-    while (!terminate(pc, reg)) && isinside(reg.shape, position(pc))
+    while (!terminate(pc, reg)) && isinside(shape(reg), position(pc))
         prevr = nextr
         (λ, θₙ, ϕₙ, ΔZ) = scf(pc, nextr.material) 
         (pc, nextr, scatter) = take_step(pc, nextr, λ, θ, ϕ, ΔZ)
@@ -549,138 +333,9 @@ function trajectory(
     eval::Function,
     p::T,
     reg::AbstractRegion,
-    scf::Function = (t::T, mat::Material) -> transport(t, mat); 
-    minE::Float64 = 50.0,
+    scf::Function = (t::T, mat::AbstractMaterial) -> transport(t, mat); 
+    minE::Real = 50.0,
 ) where {T<:Particle}
     term(pc::T, _::AbstractRegion) = pc.energy < minE
     trajectory(eval, p, reg, scf, term)
-end
-
-function trajectory(
-    eval::Function,
-    p::T,
-    reg::AbstractRegion,
-    mat::ParametricMaterial,
-    scf::Function,
-    terminate::Function,
-) where {T<:Particle}
-    (pc, nextr) = (p, childmost_region(reg, position(p)))
-    θ, ϕ = 0.0, 0.0
-    while (!terminate(pc, reg)) && isinside(reg.shape, position(pc)) 
-        prevr = nextr
-        (λ, θₙ, ϕₙ, ΔZ) = scf(pc, mat, 4) 
-        (pc, nextr, scatter) = take_step(pc, nextr, λ, θ, ϕ, ΔZ)
-        (θ, ϕ) = scatter ? (θₙ, ϕₙ) : (0.0, 0.0)
-        eval(pc, prevr)
-    end
-end
-function trajectory(
-    eval::Function,
-    p::T,
-    reg::AbstractRegion,
-    mat::ParametricMaterial,
-    scf::Function = (t::T, mat::ParametricMaterial, num_it::Int) -> transport(t, mat, 4); # Adjusted the function definition to include θ, ϕ
-    minE::Float64 = 50.0,
-) where {T<:Particle}
-    term(pc::T, _::AbstractRegion) = pc.energy < minE
-    trajectory(eval, p, reg, mat, scf, term)
-end
-
-
-# SINGLE FUNCTIONS TO TEST RANDOM PATH LENGTHS
-
-# This isn't working... why?
-# It does all iterations within the region volume, and the regular trajectory function does not, even though nothing is different between them  
-function trajectory_rand_path_check(
-    eval::Function,
-    p::T,
-    reg::AbstractRegion,
-    #total_path_length_vector::Vector{Float64},
-    #scatter_angle_vector::Vector{Float64},
-    scf::Function,
-    terminate::Function,
-) where {T<:Particle}
-    (pc, nextr) = (p, childmost_region(reg, position(p)))
-    θ, ϕ = 0.0, 0.0
-    total_path_length = 0
-    while (!terminate(pc, reg)) && isinside(reg.shape, position(pc)) # isinside function also breaks it?!
-        prevr = nextr
-        (λ, θₙ, ϕₙ, ΔZ) = scf(pc, nextr.material) 
-        (pc, nextr, scatter) = take_step(pc, nextr, λ, θ, ϕ, ΔZ) 
-        total_path_length += λ
-        if !scatter 
-            (θ, ϕ) = (0.0,0.0)
-        else
-            (θ, ϕ) = (θₙ, ϕₙ) 
-            #append!(total_path_length_vector, total_path_length)
-            #append!(scatter_angle_vector, θₙ)
-            #total_path_length = 0
-            break
-        end
-        eval(pc, prevr)
-    end
-    return total_path_length, θ
-end
-
-function trajectory_rand_path_check(
-    eval::Function,
-    p::T,
-    reg::AbstractRegion,
-    #tplv::Vector{Float64},
-    #sav::Vector{Float64},
-    scf::Function = (t::T, mat::Material) -> transport(t, mat); 
-    minE::Float64 = 50.0,
-) where {T<:Particle}
-    term(pc::T, _::AbstractRegion) = pc.energy < minE
-    #trajectory_rand_path_check(eval, p, reg, tplv, sav, scf, term)
-    trajectory_rand_path_check(eval, p, reg, scf, term)
-end
-
-# PARAMETRIC
-
-function trajectory_rand_path_check(
-    eval::Function,
-    p::T,
-    reg::AbstractRegion,
-    mat::ParametricMaterial,
-    #total_path_length_vector::Vector{Float64},
-    #scatter_angle_vector::Vector{Float64},
-    scf::Function,
-    terminate::Function,
-) where {T<:Particle}
-    (pc, nextr) = (p, childmost_region(reg, position(p)))
-    θ, ϕ = 0.0, 0.0
-    total_path_length = 0
-    while (!terminate(pc, reg)) && isinside(reg.shape, position(pc)) 
-        prevr = nextr
-        (λ, θₙ, ϕₙ, ΔZ) = scf(pc, mat, 4) 
-        (pc, nextr, scatter) = take_step(pc, nextr, λ, θ, ϕ, ΔZ)
-        total_path_length += λ
-        if !scatter 
-            (θ, ϕ) = (0.0,0.0)
-        else
-            (θ, ϕ) = (θₙ, ϕₙ) 
-            #append!(total_path_length_vector, total_path_length)
-            #append!(scatter_angle_vector, θₙ)
-            #total_path_length = 0
-            break
-        end
-        eval(pc, prevr)
-    end
-    return total_path_length, θ
-end
-
-function trajectory_rand_path_check(
-    eval::Function,
-    p::T,
-    reg::AbstractRegion,
-    mat::ParametricMaterial,
-    #tplv::Vector{Float64},
-    #sav::Vector{Float64},
-    scf::Function = (t::T, mat::ParametricMaterial, num_it::Int) -> transport(t, mat, 4); # Adjusted the function definition to include θ, ϕ
-    minE::Float64 = 50.0,
-) where {T<:Particle}
-    term(pc::T, _::AbstractRegion) = pc.energy < minE
-    #trajectory_rand_path_check(eval, p, reg, mat, tplv, sav, scf, term)
-    trajectory_rand_path_check(eval, p, reg, mat, scf, term)
 end

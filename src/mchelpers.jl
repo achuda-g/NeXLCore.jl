@@ -23,10 +23,21 @@ function gun(
     width::Float64 = 1.0e-7,
     initial::Position = Position(0.0, 0.0, -10.0),
     direction = Position(0.0, 0.0, 1.0),
-)::T where {T<:Particle}
+) where {T<:Particle}
     r, th = sqrt(-2.0 * log(rand())) * width, 2.0π * rand()
     st = initial .+ Position(r * cos(th), r * sin(th), 0.0)
     return T(st .- direction, st, energy)
+end
+function gun(
+    gen::Any,
+    energy::Float64,
+    width::Float64 = 1.0e-7,
+    initial::Position = Position(0.0, 0.0, -10.0),
+    direction = Position(0.0, 0.0, 1.0),
+)
+    r, th = sqrt(-2.0 * log(rand())) * width, 2.0π * rand()
+    st = initial .+ Position(r * cos(th), r * sin(th), 0.0)
+    return gen(st .- direction, st, energy)
 end
 
 """

@@ -6,6 +6,154 @@ using LaTeXStrings
 import Base.rand
 import Statistics
 
+const _AVAGADRO = ustrip(NoUnits, AvogadroConstant / u"1/mol")
+
+"""
+Abstract type for defining Materials which Hold basic data about a material including name, composition in mass fraction and optional propreties.
+
+It is a parametric type with parameters `U` and `V`. `U` is the datatype of mass-fractions and `V` of atomic weights. 
+All subtypes must at least contain fields for `name`, and `properties`.
++`name` is an human friendly name
++`properties` is a dict with properties of the material (listed below)
+
+**Properties**
+
+    :Density # Density in g/cm³
+    :Description # Human friendly
+    :Pedigree #  Quality indicator for compositional data ("SRM-XXX", "CRM-XXX", "NIST K-Glass", "Stoichiometry", "Wet-chemistry by ???", "WDS by ???", "???")
+    :Conductivity = :Insulator | :Semiconductor | :Conductor
+    :OtherUserProperties # Other properties can be defined as needed
+"""
+abstract type AbstractMaterial{U, V} end
+
+"""
+    properties(mat::AbstractMaterial)
+
+Properties dict associated with the material `mat`.
+"""
+properties(mat::AbstractMaterial) = mat.properties
+
+"""
+    name(mat::AbstractMaterial)
+
+Human friendly short name of the material.
+"""
+name(mat::AbstractMaterial) = mat.name
+
+"""
+    density(mat::AbstractMaterial)
+
+Density in g/cm³ (Might be 'missing')
+"""
+function density(mat::AbstractMaterial)
+    if ~haskey(mat, :Density)
+        error("Density is not defined for this material")
+    end
+    mat[:Density]
+end
+
+"""
+    description(mat::AbstractMaterial)
+
+The :Description property.
+"""
+description(mat::AbstractMaterial) = get(mat, :Description, "Not defined")
+
+"""
+    pedigree(mat::AbstractMaterial)
+
+The :Pedigree property.
+"""
+pedigree(mat::AbstractMaterial) = get(mat, :Pedigree, "Not defined")
+
+Base.getindex(mat::AbstractMaterial, sym::Symbol) = getindex(properties(mat), sym)
+Base.get(mat::AbstractMaterial, sym::Symbol, def) = get(properties(mat), sym, def)
+Base.setindex!(mat::AbstractMaterial, val, sym::Symbol) = properties(mat)[sym] = val
+
+"""
+    haskey(mat::AbstractMaterial, sym::Symbol)
+
+Does this material have this property defined?
+"""
+Base.haskey(mat::AbstractMaterial, sym::Symbol) = haskey(properties(mat), sym)
+
+function Base.show(io::IO, mat::AbstractMaterial)
+    res = "$(name(mat))["
+    res *= join(
+        (
+            @sprintf("%s=%0.4f", el.symbol, value(mat[el])) for el in sort(collect(elms(mat)))
+        ),
+        ",",
+    )
+    try
+        res *= @sprintf(",%0.2f g/cm³", density(mat))
+    catch
+        nothing
+    end
+    res *= "]"
+    print(io, res)
+end
+
+"""
+    elms(mat::AbstractMaterial)
+
+Iterator for the elements in the material
+"""
+elms(::AbstractMaterial) = error("Not Implemented")
+
+"""
+    a(elm::Element, mat::AbstractMaterial)
+
+Get the atomic weight for the specified Element in the specified Material.
+"""
+a(::Element, ::AbstractMaterial) = error("Not Implemented")
+
+"""
+    atoms_per_g(elm::Element)
+
+Number of atoms in 1 gram of pure element `elm`
+"""
+atoms_per_g(elm::Element) = _AVAGADRO / a(elm)
+
+"""
+    atoms_per_g(mat::AbstractMaterial, elm::Element)
+
+Number of atoms of element `elm` in 1 gram of material `mat`.
+"""
+atoms_per_g(::AbstractMaterial, ::Element) = error("Not Implemented")
+
+"""
+    atoms_per_g(mat::AbstractMaterial)
+
+Compute the number of atoms in 1 gram of material `mat`.
+"""
+atoms_per_g(::AbstractMaterial) = error("Not Implemented")
+
+"""
+    atoms_per_cm³(mat::AbstractMaterial, elm::Element)
+
+Number of atoms per cm³ of the element `elm` in the material `mat`. 
+The Material must define the `:Density` property.
+"""
+atoms_per_cm³(mat::AbstractMaterial, elm::Element) = atoms_per_g(mat, elm) * density(mat)
+
+"""
+    atoms_per_cm³(mat::AbstractMaterial)
+
+Number of atoms per cm³ in the material `mat`. 
+The Material must define the `:Density` property.
+"""
+atoms_per_cm³(mat::AbstractMaterial) = atoms_per_g(mat) * density(mat)
+
+"""
+    atomicfrac(mat::AbstractMaterial)
+
+Atomic fraction of element `elm` in material `mat`.
+"""
+atomicfrac(mat::AbstractMaterial, elm::Element) = _atomicfrac(mat, elm) / sum(e -> _atomicfrac(mat, e), elms(mat))
+
+_atomicfrac(mat::AbstractMaterial, elm::Element) = mat[elm] / a(elm, mat)
+
 """
 Holds basic data about a material including name, composition in mass fraction and optional propreties.
 
@@ -30,7 +178,7 @@ The mass fraction and atomic weight are immutable but the `Properties` can be mo
     :Conductivity = :Insulator | :Semiconductor | :Conductor
     :OtherUserProperties # Other properties can be defined as needed
 """
-struct Material{U<:AbstractFloat,V<:AbstractFloat}
+struct Material{U<:AbstractFloat,V<:AbstractFloat} <: AbstractMaterial{U, V}
     name::String
     massfraction::Dict{Element,U}
     a::Dict{Element,V} # Optional: custom atomic weights for the keys in this Material
@@ -67,8 +215,6 @@ rename(mat::Material, newname::AbstractString) = Material(newname, mat.massfract
 
 Base.copy(m::Material) =
     Material(m.name, copy(m.massfraction), copy(m.a), copy(m.properties))
-
-properties(mat::Material) = mat.properties
 
 """
     elms(mat::Material)
@@ -187,57 +333,7 @@ function Base.sum(
     return Material(ismissing(name) ? res.name : name, res.massfraction, res.a, props)
 end
 
-"""
-    name(mat::Material)
-
-Return a human friendly short name for the Material.
-"""
-name(mat::Material) = mat.name
-
-"""
-    density(mat::Material)
-
-Return the density in g/cm³ (Might be 'missing')
-"""
-density(mat::Material) = mat[:Density]
-
-"""
-    description(mat::Materail)
-
-The :Description property.
-"""
-description(mat::Material) = mat[:Description]
-
-"""
-    pedigree(mat::Material)
-
-The :Pedigree property.
-"""
-pedigree(mat::Material) = mat[Pedigree]
-
-"""
-    atoms_per_cm³(mat::Material, elm::Element) =
-
-Number of atoms per cm³ of the specified Element in the specified Material.  The Material must define
-the `:Density` property.
-
-    atoms_per_cm³(mat::Material)
-
-Total number of atoms per cm³ for all elements in mat. 
-"""
-atoms_per_cm³(mat::Material, elm::Element) = mat[:Density] * atoms_per_g(mat, elm)
-atoms_per_cm³(mat::Material) = sum(atoms_per_cm³(mat, elm) for elm in keys(mat))
-
-
-"""
-    atoms_per_g(elm::Element)
-    atoms_per_g(mat::Material)
-    atoms_per_g(mat::Material, elm::Element)
-
-Compute the number of atoms of `elm` in 1 gram of `mat`.
-"""
-atoms_per_g(elm::Element) = ustrip(NoUnits, AvogadroConstant / (a(elm) * u"1/mol"))
-atoms_per_g(mat::Material, elm::Element) = ustrip(NoUnits, mat[elm] * AvogadroConstant / (a(elm, mat) * u"1/mol"))
+atoms_per_g(mat::Material, elm::Element) = mat[elm] * _AVAGADRO / a(elm, mat)
 atoms_per_g(mat::Material) = sum(elm -> atoms_per_g(mat, elm), keys(mat))
 
 """
@@ -318,21 +414,6 @@ Example:
 pure(elm::Element) =
     material("Pure $(symbol(elm))", Dict{}(elm => 1.0), density=density(elm))
 
-function Base.show(io::IO, mat::Material)
-    res = "$(name(mat))["
-    res *= join(
-        (
-            @sprintf("%s=%0.4f", el.symbol, value(mat[el])) for el in sort(collect(keys(mat.massfraction)))
-        ),
-        ",",
-    )
-    if haskey(mat.properties, :Density)
-        res *= @sprintf(",%0.2f g/cm³", density(mat))
-    end
-    res *= "]"
-    print(io, res)
-end
-
 """
     Base.convert(::Type{Material}, str::AbstractString)
 
@@ -364,22 +445,12 @@ function Base.convert(::Type{Material{Float64,Float64}}, comp::Material)::Materi
 end
 Base.convert(::Type{Material{Float64,Float64}}, ::Nothing) = nothing
 
-
-"""
-    a(elm::Element, mat::Material)
-
-Get the atomic weight for the specified Element in the specified Material.
-"""
 a(elm::Element, mat::Material) = get(mat.a, elm, a(elm))
 
 Base.getindex(mat::Material{U,V}, elm::Element) where {U<:AbstractFloat,V<:AbstractFloat} =
     get(mat.massfraction, elm, zero(U))
 Base.getindex(mat::Material{U,V}, z::Int) where {U<:AbstractFloat,V<:AbstractFloat} =
     get(mat.massfraction, elements[z], zero(U))
-
-Base.getindex(mat::Material, sym::Symbol) = getindex(mat.properties, sym)
-Base.get(mat::Material, sym::Symbol, def) = get(mat.properties, sym, def)
-Base.setindex!(mat::Material, val, sym::Symbol) = mat.properties[sym] = val
 
 """
     nonneg(mat::Material{U,V}, elm::Element)::U where {U<:AbstractFloat,V<:AbstractFloat}
@@ -539,13 +610,6 @@ Does this material contain this element?
 """
 Base.haskey(mat::Material, elm::Element) = haskey(mat.massfraction, elm)
 Base.haskey(mat::Material, z::Int) = haskey(mat.massfraction, elements[z])
-
-"""
-    haskey(mat::Material, sym::Symbol)
-
-Does this material have this property defined?
-"""
-Base.haskey(mat::Material, sym::Symbol) = haskey(mat.properties, sym)
 
 """
     atomicfraction(

@@ -164,3 +164,36 @@ function fluorescenceyield(ass::AtomicSubShell,::Type{Reed1975ω})
         error("Reed 1975 only implements K-shell fluorescence yields.")
     end
 end
+
+function cumulative!(v::AbstractVector{T}) where T
+    for i in eachindex(v)
+        v[i] += get(v, i, zero(T))
+    end
+    return v
+end
+
+direction(v1::AbstractArray{<:Number}, v2::AbstractArray{<:Number}) = LinearAlgebra.normalize(v1 .- v2)
+
+function elsepa_angles()
+    res = Vector{Float64}()
+    push!(res, 0.0)
+    push!(res, 1e-4)
+    while res[end] < 180
+        if res[end] < 0.9999e-3
+            push!(res, res[end] + 2.5e-5)
+        elseif res[end] < 0.9999e-2
+            push!(res, res[end] + 2.5e-4)
+        elseif res[end] < 0.9999e-1
+            push!(res, res[end] + 2.5e-3)
+        elseif res[end] < 0.9999e+0
+            push!(res, res[end] + 2.5e-2)
+        elseif res[end] < 0.9999e+1
+            push!(res, res[end] + 1.0e-1)
+        elseif res[end] < 2.4999e+1
+            push!(res, res[end] + 2.5e-1)
+        else
+            push!(res, res[end] + 5.0e-1)
+        end
+    end
+    return res
+end

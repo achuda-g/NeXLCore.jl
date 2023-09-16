@@ -65,7 +65,7 @@ function _pp(ss::String)
 end
 
 Base.:(:)(start::Element, stop::Element) = view(PeriodicTable._elements_data, z(start):z(stop))
-Base.:(:)(start::Element, step::Int, stop::Element) = view(PeriodicTable._elements_data, z(start):step:z(stop))
+Base.:(:)(start::Element, step::Integer, stop::Element) = view(PeriodicTable._elements_data, z(start):step:z(stop))
 
 """
     atomic_weight[elm::Element]::Union{NumberInterval, UncertainValue}
