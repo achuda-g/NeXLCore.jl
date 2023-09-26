@@ -242,7 +242,6 @@ struct VoxelisedRegion{DIM, T, P} <: AbstractVoxelRegion{DIM, P, Nothing}
         
         (N1, N2, N3) = num_voxels
         voxels = Array{AbstractVoxelRegion}(undef, N1, N2, N3)
-        println(typeof.((sh, parent, voxels, nodes, name, voxel_sizes)))
         res = new{Tuple{N1, N2, N3}, T, typeof(parent)}(sh, parent, voxels, nodes, name, voxel_sizes)
         
         if !isnothing(parent)
