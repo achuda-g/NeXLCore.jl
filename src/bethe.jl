@@ -113,25 +113,48 @@ function dEds(
     return ((-785.0e8 * ρ * z(elm)) / (a(elm) * e)) * log(1.166 * e / jp)
 end
 function dEds(
-    ty::Type{<:BetheEnergyLoss},
+    ::Type{BEL},
     e::Real,
     mat::AbstractMaterial,
-    mip::Type{<:NeXLMeanIonizationPotential} = Berger1982,
-)
+    ::Type{MIP} = Berger1982,
+) where {BEL<:BetheEnergyLoss, MIP<:NeXLMeanIonizationPotential}
     ρ = density(mat)
     return sum(elms(mat)) do el
-        dEds(ty, e, el, ρ, mip) * mat[el]
+        dEds(BEL, e, el, ρ, MIP) * mat[el]
     end
 end
 function dEds(
-    ty::Type{<:BetheEnergyLoss},
+    ::Type{BEL},
     e::Real,
     mat::VectorizedMaterial,
-    mip::Type{<:NeXLMeanIonizationPotential} = Berger1982,
-)
+    ::Type{MIP} = Berger1982,
+) where {BEL<:BetheEnergyLoss, MIP<:NeXLMeanIonizationPotential}
     ρ = density(mat)
     return sum(eachindex(mat)) do i
-        dEds(ty, e, elm_nocheck(mat, i), ρ, mip) * massfrac(mat, i)
+        dEds(BEL, e, elm_nocheck(mat, i), ρ, MIP) * massfrac(mat, i)
+    end
+end
+
+function dEds!(
+    ::Type{BEL},
+    e::Real,
+    mat::MTemplateMaterial,
+    pos::AbstractVector,
+    ::Type{MIP} = Berger1982,
+) where {BEL<:BetheEnergyLoss, MIP<:NeXLMeanIonizationPotential}
+    update!(mat, pos)
+    dEds(BEL, e, mat, MIP)
+end
+function dEds!(
+    ::Type{BEL},
+    e::Real,
+    mat::MTemplateMaterialLocked,
+    pos::AbstractVector,
+    ::Type{MIP} = Berger1982,
+) where {BEL<:BetheEnergyLoss, MIP<:NeXLMeanIonizationPotential}
+    return locked(mat) do 
+        update!(mat, pos)
+        dEds(BEL, e, mat, MIP)
     end
 end
 

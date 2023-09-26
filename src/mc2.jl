@@ -146,17 +146,30 @@ function transport(
 end
 
 function alter_energy!(
-    p::MutableParticle, 𝜆::Real, mat::AbstractMaterial, ::Type{B}, ::Type{M}
-) where {B<:BetheEnergyLoss, M<:NeXLMeanIonizationPotential}
-    ΔE = dEds(B, energy(p), mat, M) * 𝜆
+    p::MutableParticle, 𝜆::Real, mat::AbstractMaterial, ::Type{BEL}, ::Type{MIP}
+) where {BEL<:BetheEnergyLoss, MIP<:NeXLMeanIonizationPotential}
+    ΔE = dEds(BEL, energy(p), mat, MIP) * 𝜆
     alter_energy!(p, ΔE)
 end
 function alter_energy!(
-    p::MutableParticle, 𝜆::Real, mat::ParametricMaterial, ::Type{B}, ::Type{M}
-) where {B<:BetheEnergyLoss, M<:NeXLMeanIonizationPotential}
-    update!(mat, current(p))
-    ΔE = dEds(B, energy(p), mat, M) * 𝜆
+    p::MutableParticle, 𝜆::Real, mat::ParametricMaterial, ::Type{BEL}, ::Type{MIP}
+) where {BEL<:BetheEnergyLoss, MIP<:NeXLMeanIonizationPotential}
+    pos, dir, e = current(p), direction(p), energy(p)
+    newpos = similar(pos)
+    ΔE = quad(zero(𝜆), 𝜆) do l
+        newpos .= pos .+ l .* dir
+        dEdS!(BEL, e, mat, newpos, MIP)
+    end
     alter_energy!(p, ΔE)
+end
+
+function scatter!(p::MutableParticle{T}, mat::AbstractMaterial, ::Type{ECS}) where {T, ECS<:ElasticScatteringCrossSection}
+    (𝜃, 𝜙) = scatter(ECS, mat, energy(p), T)
+    deflect!(p, 𝜃, 𝜙)
+end
+function scatter!(p::MutableParticle{T}, mat::ParametricMaterial, ::Type{ECS}) where {T, ECS<:ElasticScatteringCrossSection}
+    (𝜃, 𝜙) = scatter!(ECS, mat, energy(p), current(p), T)
+    deflect!(p, 𝜃, 𝜙)
 end
 
 function transporter(;
@@ -196,10 +209,12 @@ function trajectory2(
     trajectory2(eval, p, reg, terminate, scf)
 end
 
-struct VoxelisedRegion{DIM, M, T} <: AbstractRegion{M}
+abstract type AbstractVoxelRegion{DIM, P, M} <: AbstractRegion{M} end
+
+struct VoxelisedRegion{DIM, T, P} <: AbstractVoxelRegion{DIM, P, Nothing}
     shape::Rect3{T}
-    parent::Union{Nothing, AbstractRegion}
-    children::Array{AbstractRegion, 3}
+    parent::P
+    children::Array{AbstractVoxelRegion, 3}
     nodes::Vector{Vector{T}}
     name::String
     voxel_sizes::NTuple{3, T}
@@ -210,11 +225,14 @@ struct VoxelisedRegion{DIM, M, T} <: AbstractRegion{M}
         num_voxels::Union{NTuple{3, <:Integer}, AbstractVector{<:Integer}},
         name::Union{Nothing,String} = nothing,
     ) where {T<:AbstractFloat}
+        maxsize = Float64(Sys.total_memory()) / 200
+        if prod(num_voxels) > maxsize
+            error("Voxels are too big for memory")
+        end
         name = something(
             name,
             isnothing(parent) ? "Root" : "$(parent.name)[$(length(parent.children)+1)]",
         )
-
         voxel_sizes = (sh.widths[1] / num_voxels[1], sh.widths[2] / num_voxels[2], sh.widths[3] / num_voxels[3])
 
         #nodes = [(sh.origin[1] + i * voxel_sizes[1], 
@@ -223,8 +241,9 @@ struct VoxelisedRegion{DIM, M, T} <: AbstractRegion{M}
         nodes = [sh.origin[i] .+ collect(0:num_voxels[i]) .* voxel_sizes[i] for i in 1:3]
         
         (N1, N2, N3) = num_voxels
-        voxels = Array{AbstractRegion}(undef, N1, N2, N3)
-        res = new{Tuple{N1, N2, N3}, Nothing, T}(sh, parent, voxels, nodes, name, voxel_sizes)
+        voxels = Array{AbstractVoxelRegion}(undef, N1, N2, N3)
+        println(typeof.((sh, parent, voxels, nodes, name, voxel_sizes)))
+        res = new{Tuple{N1, N2, N3}, T, typeof(parent)}(sh, parent, voxels, nodes, name, voxel_sizes)
         
         if !isnothing(parent)
             #= For nested Voxelized regions this could be a problem will have to come up with a more elegant solution
@@ -259,7 +278,7 @@ function VoxelisedRegion(
     sh::Rect3{T},
     mat_func::Function,
     parent::Union{Nothing,AbstractRegion},
-    num_voxels::Union{NTuple{3, <:Integer}, AbstractVector{<:Integer}},
+    num_voxels::Union{NTuple{3, <:Integer}, AbstractVector{<:Integer}};
     name::Union{Nothing,String} = nothing,
 ) where {T<:AbstractFloat}
     res = VoxelisedRegion(sh, parent, num_voxels, name)
@@ -273,11 +292,11 @@ function VoxelisedRegion(
     sh::Rect3{T},
     mat_temp::MaterialTemplate,
     parent::Union{Nothing,AbstractRegion},
-    num_voxels::Union{NTuple{3, <:Integer}, AbstractVector{<:Integer}},
+    num_voxels::Union{NTuple{3, <:Integer}, AbstractVector{<:Integer}};
     name::Union{Nothing,String}=nothing,
     massfrac_type::Type{<:AbstractFloat}=Float64,
     static::Bool=true,
-    threaded::Bool=false,
+    kwargs...
 ) where {T<:AbstractFloat}
     res = VoxelisedRegion(sh, parent, num_voxels, name)
     for (i, j, k) in eachindex(res)
@@ -288,7 +307,7 @@ function VoxelisedRegion(
         if static
             mat = STemplateMaterial(mat_temp, massfracs, ρ)
         else
-            mat = MTemplateMaterial(mat_temp, massfracs, ρ, false, pos, threaded)
+            mat = MTemplateMaterial(mat_temp, massfracs, ρ; kwargs...)
         end
         res.children[i, j, k] = Voxel((i, j, k), mat, res)
     end
@@ -296,7 +315,7 @@ function VoxelisedRegion(
 end
 
 # For Future implementation of Octal Regions
-const OctalRegion{T} = VoxelisedRegion{Tuple{2, 2, 2}, T}
+const OctalRegion{T, P} = VoxelisedRegion{Tuple{2, 2, 2}, T, P}
 
 Base.size(::VoxelisedRegion{Tuple{N1, N2, N3}}) where {N1, N2, N3} = (N1, N2, N3)
 Base.eachindex(::VoxelisedRegion{Tuple{N1, N2, N3}}) where {N1, N2, N3} = begin
@@ -304,15 +323,26 @@ Base.eachindex(::VoxelisedRegion{Tuple{N1, N2, N3}}) where {N1, N2, N3} = begin
 end
 Base.length(vr::VoxelisedRegion) = prod(size(vr))
 
+function Base.show(io::IO, ::MIME"text/plain", vr::VoxelisedRegion{<:Any, T, P}) where {T, P}
+    print(io, "$(typeof(vr)):")
+    print(io, "\n name: ", name(vr))
+    print(io, "\n shape: Rect(origin=$(Tuple(origin(shape(vr)))), widths=$(Tuple(widths(shape(vr)))))")
+    print(io, "\n voxel_size: $(vr.voxel_sizes)")
+    print(io, "\n parent: ", split("$P", "{")[1], "(name=$(name(parent(vr))))")
+end
+function Base.show(io::IO, vr::VoxelisedRegion)
+    print(io, "$(typeof(vr))[", name(vr), ", origin=$(origin(shape(vr))), voxel_sizes=$(vr.voxel_sizes)]")
+end
+
 
 material(::VoxelisedRegion) = error("VoxelisedRegion doesn't have a material")
 
-function node(vr::VoxelisedRegion{<:Any, <:Any, T}, i::Integer, j::Integer, k::Integer)  where T
+function node(vr::VoxelisedRegion{<:Any, T, <:Any}, i::Integer, j::Integer, k::Integer)  where T
     SVector{3, T}(vr.nodes[1][i], vr.nodes[2][j], vr.nodes[3][k])
 end
 
 function corner(
-    vr::VoxelisedRegion{<:Any, <:Any, T}, i::Integer, j::Integer, k::Integer, cornerid::Union{Tuple, AbstractArray}
+    vr::VoxelisedRegion{<:Any, T, <:Any}, i::Integer, j::Integer, k::Integer, cornerid::Union{Tuple, AbstractArray}
 ) where T
     sz = vr.voxel_sizes
     @assert length(cornerid) == 3 "length of cornerid is not 3"
@@ -322,25 +352,36 @@ end
 
 centroid(vr::VoxelisedRegion, i::Integer, j::Integer, k::Integer) = corner(vr, i, j, k, (0.5, 0.5, 0.5))
 
-struct Voxel{M<:AbstractMaterial} <: AbstractRegion{M}
+struct Voxel{P, M<:AbstractMaterial} <: AbstractVoxelRegion{Tuple{1, 1, 1}, P, M}
     index::NTuple
     material::M
-    parent::VoxelisedRegion
+    parent::P
+end
+
+function Base.show(io::IO, ::MIME"text/plain", vx::Voxel{<:Any, M}) where M
+    print(io, "$(name(vx)):\n")
+    print(io, "mat_type: $M\n")
+    print(io, "shape: Rect(origin=$(Tuple(minimum(vx))), widths=$(Tuple(widths(vx))))\n")
+    print(io, "parent_size: $(size(parent(vx)))")
+end
+function Base.show(io::IO, vx::Voxel)
+    print(io, "$(typeof(vx))[origin=$(Tuple(minimum(vx))), voxel_sizes=$(Tuple(widths(vx)))]")
 end
 
 i1(vx::Voxel) = @inbounds vx.index[1]
 i2(vx::Voxel) = @inbounds vx.index[2]
 i3(vx::Voxel) = @inbounds vx.index[3]
 shape(reg::Voxel) = reg
-name(vx::Voxel) = "Voxel[$(i1(vx)), $(i2(vx)), $(i3(vx))] of $(name(VoxelisedRegion))"
+name(vx::Voxel) = "Voxel[$(i1(vx)), $(i2(vx)), $(i3(vx))] of $(name(parent(vx)))"
 
 function rect(vx::Voxel)
-    RectangularShape(nodes(vx.parent, i1(vx), i2(vx), i3(vx)), vx.parent.voxel_sizes)
+    RectangularShape(node(vx.parent, i1(vx), i2(vx), i3(vx)), vx.parent.voxel_sizes)
 end
 
-Base.maximum(vx::Voxel) = nodes(vx.parent, ix(vx)+1, iy(vx)+1, iz(vx)+1)
-Base.minimum(vx::Voxel) = nodes(vx.parent, ix(vx), iy(vx), iz(vx))
+Base.maximum(vx::Voxel) = node(vx.parent, i1(vx)+1, i2(vx)+1, i3(vx)+1)
+Base.minimum(vx::Voxel) = node(vx.parent, i1(vx), i2(vx), i3(vx))
 GeometryBasics.origin(vx::Voxel) = minimum(vx)
+GeometryBasics.widths(vx::Voxel) = parent(vx).voxel_sizes
 
 function isinside(vx::Voxel, pos::StaticVector{3, <:Real})
     nodes = vx.parent.nodes

@@ -93,6 +93,7 @@ function Base.show(io::IO, mat::AbstractMaterial)
     res *= "]"
     print(io, res)
 end
+Base.show(io::IO, ::MIME"plain/text", mat::AbstractMaterial) = show(io, AbstractMaterial)
 
 """
     elms(mat::AbstractMaterial)
@@ -103,10 +104,12 @@ elms(::AbstractMaterial) = error("Not Implemented")
 
 """
     a(elm::Element, mat::AbstractMaterial)
+    atomicmass(mat::AbstractMaterial, elm::Element)
 
 Get the atomic weight for the specified Element in the specified Material.
 """
 a(::Element, ::AbstractMaterial) = error("Not Implemented")
+atomicmass(mat::AbstractMaterial, elm::Element) = a(elm, mat)
 
 """
     atoms_per_g(elm::Element)

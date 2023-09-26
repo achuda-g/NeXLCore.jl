@@ -53,7 +53,7 @@ Return the nominal density for the element in g/cm³.
 """
 density(elm::Element) = ustrip(elm.density |> u"g/cm^3")
 
-Base.:(==)(elm1::Element, elm2::Element) = z(elm1) == z(elm2)
+#Base.:(==)(elm1::Element, elm2::Element) = z(elm1) == z(elm2) # is included in PeriodicTable.jl
 
 function _pp(ss::String)
     p = findfirst('.', ss)

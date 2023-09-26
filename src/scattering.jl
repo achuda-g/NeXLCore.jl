@@ -261,6 +261,16 @@ function λ(::Type{S}, mat::AbstractMaterial, E::Real) where {S<:ElasticScatteri
     return λ(σₜ(S, mat, E), atoms_per_cm³(mat)) 
 end
 
+function λ!(::Type{S}, mat::MTemplateMaterial, E::Real, pos::AbstractVector) where {S<:ElasticScatteringCrossSection}
+    update!(mat, newpos)
+    return λ(S, mat, E) 
+end
+function λ!(::Type{S}, mat::MTemplateMaterialLocked, E::Real, pos::AbstractVector) where {S<:ElasticScatteringCrossSection}
+    return locked(mat) do mat
+        update!(mat, newpos)
+        λ(S, mat, E)
+    end
+end
 
 """
     Base.rand(::Type{<:ElasticScatteringCrossSection}, mat::AbstractMaterial, E::Real, floattype::Type{<:AbstractFloat}=Float64)::NTuple{3,}
@@ -341,8 +351,7 @@ function randλ(
         λ′old = λ′
         λ′ = quad(zero(λ′), rl) do l
             newpos .= pos .+ l .* dir
-            update!(mat, newpos)
-            λ(S, mat, E)
+            λ!(S, mat, E, newpos)
         end
         λ′ /= rl
         rl = r * λ′
@@ -387,10 +396,25 @@ end
 Randomly selected azimuthal and polar scattering angles relative to direction of travel after elastic scattering.
 """
 function scatter(
-    ::Type{S}, mat::AbstractMaterial, E::Real, floattype::Type{T}=Float64
+    ::Type{S}, mat::AbstractMaterial, E::Real, ::Type{T}=Float64
 ) where {S<:ElasticScatteringCrossSection, T<:AbstractFloat}
     elm′ = randelm(S, mat, E, T)
     return (rand(S, elm′, E), T(2.0 * π) * rand(T))
+end
+
+function scatter!(
+    ::Type{S}, mat::MTemplateMaterial, E::Real, pos::AbstractVector, ::Type{T}=Float64
+) where {S<:ElasticScatteringCrossSection, T<:AbstractFloat}
+    update!(mat, pos)
+    return scatter(S, mat, E, T)
+end
+function scatter!(
+    ::Type{S}, mat::MTemplateMaterialLocked, E::Real, pos::AbstractVector, ::Type{T}=Float64
+) where {S<:ElasticScatteringCrossSection, T<:AbstractFloat}
+    return locked(mat) do mat
+        update!(mat, pos)
+        scatter(S, mat, E, T)
+    end
 end
 
 

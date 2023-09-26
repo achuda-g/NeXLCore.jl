@@ -28,7 +28,7 @@ If the ray from `pos0` towards `pos2` does not intersect `r` then this function 
 const RectangularShape = Rect3{Float64}
 
 isinside(rr::RectangularShape, pos::AbstractArray{<:Real}) =
-    all(pos .> minimum(rr)) && all(pos .< maximum(rr)) # write for voxels i, i + 1
+    all(pos .≥ minimum(rr)) && all(pos .≤ maximum(rr)) # write for voxels i, i + 1
 
 function intersection(
     rr::RectangularShape,
@@ -197,13 +197,6 @@ shape(reg::AbstractRegion) = reg.shape
 parent(reg::AbstractRegion) = reg.parent
 children(reg::AbstractRegion) = reg.children
 name(reg::AbstractRegion) = reg.name
-
-"""
-    findregion(pos::AbstractVector, reg::AbstractRegion)
-
-Find the region containing the point `pos` where `reg` is the region it is likely at or was previously at.
-"""
-findregion(pos::AbstractVector, reg::AbstractRegion) = childmost_region(reg::Region, pos::AbstractArray{<:Real})
 
 struct Region{M} <: AbstractRegion{M}
     shape::GeometryPrimitive{3, <:AbstractFloat}
