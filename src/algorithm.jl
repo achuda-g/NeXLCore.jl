@@ -1,6 +1,7 @@
 import Unitful: @u_str, ustrip
 import PhysicalConstants.CODATA2018: PlanckConstant, SpeedOfLightInVacuum
 import BoteSalvatICX # For ionization crosssections
+import FastGaussQuadrature: gausslegendre
 
 # These evaluate at compile time...
 const plancksConstant = ustrip(PlanckConstant |> u"eV*s")
@@ -300,7 +301,7 @@ ionizationcrosssection(
 
 
 # A Singleton Type For N-point Gauss Legendre Quadrature
-struct GLQ{N} end
+struct FastGLQ{N} end
 
 """
     quadrature(::Type{GLQ{N}}) where N
@@ -308,7 +309,7 @@ struct GLQ{N} end
 
 Get Integrator `quad(f, a, b)` that performs `N`-point Gauss Legendre quadrature of `f` from `a` to `b`.
 """
-function quadrature(::Type{GLQ{N}}) where N
+function quadrature(::Type{FastGLQ{N}}) where N
     (xp, w) = gausslegendre(N)
     function integrator(f, a, b)
         h = 0.5 * (b - a)

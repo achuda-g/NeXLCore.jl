@@ -120,7 +120,7 @@ function move!(
 end
 
 function transport(
-    p::MutableParticle,
+    p::MutableParticle{T},
     reg::AbstractRegion,
     ecs::Type{<:ElasticScatteringCrossSection}=ScreenedRutherford,
     bel::Type{<:BetheEnergyLoss}=JoyLuo,
@@ -128,7 +128,7 @@ function transport(
     rtol::Real=0.01,
     maxiter::Integer=10,
     nquad::Integer=5,
-)
+) where T
     newreg::Union{AbstractRegion, Nothing} = reg
     𝜆 = move!(ecs, p, material(reg), rtol, maxiter, nquad)
     t = intersection(reg, previous(p), current(p))
@@ -137,28 +137,31 @@ function transport(
         (𝜃, 𝜙) = scatter(ecs, material(reg), energy(p))
         deflect!(p, 𝜃, 𝜙)
     else
-        𝜆 *= t + eps(t)
+        𝜆 = 𝜆*t + eps(T)
         move_redo!(p, 𝜆)
         newreg = find_region(current(p), reg)
     end
-    alter_energy!(p, 𝜆, material(reg), bel, mip)
+    @logmsg LogLevel(-10000) "is old pos in old reg? $(isinside(reg, previous(p)))"
+    @logmsg LogLevel(-10000) "is new pos in new reg? $(isinside(newreg, current(p)))"
+    alter_energy!(p, 𝜆, material(reg), bel, mip, nquad)
     return p, newreg
 end
 
 function alter_energy!(
-    p::MutableParticle, 𝜆::Real, mat::AbstractMaterial, ::Type{BEL}, ::Type{MIP}
+    p::MutableParticle, 𝜆::Real, mat::AbstractMaterial, ::Type{BEL}, ::Type{MIP}, ::Int 
 ) where {BEL<:BetheEnergyLoss, MIP<:NeXLMeanIonizationPotential}
     ΔE = dEds(BEL, energy(p), mat, MIP) * 𝜆
     alter_energy!(p, ΔE)
 end
 function alter_energy!(
-    p::MutableParticle, 𝜆::Real, mat::ParametricMaterial, ::Type{BEL}, ::Type{MIP}
+    p::MutableParticle, 𝜆::Real, mat::ParametricMaterial, ::Type{BEL}, ::Type{MIP}, nquad::Int
 ) where {BEL<:BetheEnergyLoss, MIP<:NeXLMeanIonizationPotential}
     pos, dir, e = current(p), direction(p), energy(p)
     newpos = similar(pos)
+    quad = quadrature(nquad)
     ΔE = quad(zero(𝜆), 𝜆) do l
         newpos .= pos .+ l .* dir
-        dEdS!(BEL, e, mat, newpos, MIP)
+        dEds!(BEL, e, mat, newpos, MIP)
     end
     alter_energy!(p, ΔE)
 end
@@ -333,7 +336,6 @@ function Base.show(io::IO, vr::VoxelisedRegion)
     print(io, "$(typeof(vr))[", name(vr), ", origin=$(origin(shape(vr))), voxel_sizes=$(vr.voxel_sizes)]")
 end
 
-
 material(::VoxelisedRegion) = error("VoxelisedRegion doesn't have a material")
 
 function node(vr::VoxelisedRegion{<:Any, T, <:Any}, i::Integer, j::Integer, k::Integer)  where T
@@ -357,6 +359,9 @@ struct Voxel{P, M<:AbstractMaterial} <: AbstractVoxelRegion{Tuple{1, 1, 1}, P, M
     parent::P
 end
 
+# Don't have to check the material perhaps
+Base.:(==)(vx1::T, vx2::T) where {T<:Voxel} = vx1.index == vx2.index && vx1.parent == vx2.parent
+
 function Base.show(io::IO, ::MIME"text/plain", vx::Voxel{<:Any, M}) where M
     print(io, "$(name(vx)):\n")
     print(io, "mat_type: $M\n")
@@ -364,7 +369,7 @@ function Base.show(io::IO, ::MIME"text/plain", vx::Voxel{<:Any, M}) where M
     print(io, "parent_size: $(size(parent(vx)))")
 end
 function Base.show(io::IO, vx::Voxel)
-    print(io, "$(typeof(vx))[origin=$(Tuple(minimum(vx))), voxel_sizes=$(Tuple(widths(vx)))]")
+    print(io, "$(typeof(vx))[index= $(Tuple(vx.index)), origin=$(Tuple(minimum(vx))), voxel_sizes=$(Tuple(widths(vx)))]")
 end
 
 i1(vx::Voxel) = @inbounds vx.index[1]
@@ -372,6 +377,8 @@ i2(vx::Voxel) = @inbounds vx.index[2]
 i3(vx::Voxel) = @inbounds vx.index[3]
 shape(reg::Voxel) = reg
 name(vx::Voxel) = "Voxel[$(i1(vx)), $(i2(vx)), $(i3(vx))] of $(name(parent(vx)))"
+children(::Voxel) = []
+haschildren(::Voxel) = false
 
 function rect(vx::Voxel)
     RectangularShape(node(vx.parent, i1(vx), i2(vx), i3(vx)), vx.parent.voxel_sizes)
@@ -382,7 +389,7 @@ Base.minimum(vx::Voxel) = node(vx.parent, i1(vx), i2(vx), i3(vx))
 GeometryBasics.origin(vx::Voxel) = minimum(vx)
 GeometryBasics.widths(vx::Voxel) = parent(vx).voxel_sizes
 
-function isinside(vx::Voxel, pos::StaticVector{3, <:Real})
+function isinside(vx::Voxel, pos::AbstractVector{<:Real})
     nodes = vx.parent.nodes
     index = vx.index
     tmp(i) = @inbounds nodes[i][index[i]] ≤ pos[i] ≤ nodes[i][index[i]+1]
@@ -390,9 +397,32 @@ function isinside(vx::Voxel, pos::StaticVector{3, <:Real})
 end
 
 function intersection(reg::VoxelisedRegion, pos1::AbstractArray{<:Real}, pos2::AbstractArray{<:Real})
-    t = intersection(shape(reg), pos1, pos2)
-    if isinside(reg, pos1)
-        t = min(t, intersection(childmost_region(reg, pos1), pos1, pos2))
+    if isinside(reg, pos1) && haschildren(reg)
+        return intersection_inside(childmost_region(reg, pos1), pos1, pos2)
+    end
+    return intersection(shape(reg), pos1, pos2)
+end
+
+function intersection_inside( # how to make this more efficient? 
+    vx::Voxel,
+    pos1::AbstractArray{T},
+    pos2::AbstractArray{T},
+) where {T<:AbstractFloat}
+    t::T = typemax(T)
+    nodes = vx.parent.nodes
+    for (i, n) in enumerate(vx.index)
+        v = pos2[i] - pos1[i]
+        if v != 0
+            t1 = (nodes[i][n] - pos1[i]) / v
+            t2 = (nodes[i][n+1] - pos1[i]) / v
+            #println((t1, t2, v, pos1[i], nodes[i][n], nodes[i][n]))
+            if (t1 > 0.0) && (t1 < t)
+                t = t1
+            end
+            if (t2 > 0.0) && (t2 < t)
+                t = t2
+            end
+        end
     end
     return t
 end
@@ -402,26 +432,24 @@ function intersection( # how to make this more efficient?
     pos1::StaticVector{3, T},
     pos2::StaticVector{3, T},
 ) where T
-    t::T = typemax(T)
-    index = vx.index
-    nodes = vx.parent.nodes
-    for i in 1:3
-        v = @inbounds pos2[i] - pos1[i]
-        if v != 0
-            @inbounds j = index[i]
-            @inbounds t1 = (nodes[i][j] - pos1[i]) / v
-            @inbounds t2 = (nodes[i][j+1] - pos1[i]) / v
-            tn = min(t1, t2)
-            if (tn > 0.0) && (tn <= t)
-                t = tn
-            end
-        end
+    if isinside(vx, pos1)
+        return intersection_inside(vx, pos1, pos2)
     end
-    return t
+    @debug "$(pos1) not in the voxel with bounds $(minimum(vx)) and $(maximum(vx))"
+    if isinside(parent(vx), pos1)
+        vx2 = childmost_region(parent(vx), pos1)
+        if vx2 == vx
+            # This could mean we're running into floating point precision issues.
+            return zero(T)
+        end
+        return intersection(vx2, pos1, pos2)
+    end
+    # This should typically not happen, but could mean pos1 is on the boundary of the parent.
+    @debug pos1, minimum(vx), maximum(vx), minimum(parent(vx)), maximum(parent(vx))
+    return intersection(shape(parent(vx)), pos1, pos2)
 end
 
-childmost_region(::Nothing, ::AbstractArray) = nothing
-
+# Note: This function assumes pos is inside region
 function childmost_region(reg::VoxelisedRegion{Tuple{Nx, Ny, Nz}}, pos::AbstractArray{<:Real}) where {Nx, Ny, Nz}
     o = origin(shape(reg))
     idx(i) = ceil.(Int, (pos[i] - o[i]) / reg.voxel_sizes[i])
@@ -431,6 +459,7 @@ function childmost_region(reg::VoxelisedRegion{Tuple{Nx, Ny, Nz}}, pos::Abstract
     return childmost_region(reg.children[ix, iy, iz], pos)
 end
 
+# Note: This function assumes pos is inside region
 childmost_region(reg::Voxel, ::AbstractArray{<:Real}) = reg
 
 function find_region(pos::AbstractArray{<:Real}, reg::AbstractRegion)

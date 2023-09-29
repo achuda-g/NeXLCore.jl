@@ -262,12 +262,12 @@ function λ(::Type{S}, mat::AbstractMaterial, E::Real) where {S<:ElasticScatteri
 end
 
 function λ!(::Type{S}, mat::MTemplateMaterial, E::Real, pos::AbstractVector) where {S<:ElasticScatteringCrossSection}
-    update!(mat, newpos)
+    update!(mat, pos)
     return λ(S, mat, E) 
 end
 function λ!(::Type{S}, mat::MTemplateMaterialLocked, E::Real, pos::AbstractVector) where {S<:ElasticScatteringCrossSection}
     return locked(mat) do mat
-        update!(mat, newpos)
+        update!(mat, pos)
         λ(S, mat, E)
     end
 end
@@ -297,7 +297,7 @@ function Base.rand(
     return (λ′, rand(S, elm′, E), T(2.0 * π) * rand(T))
 end
 function Base.rand(
-    ::Type{S},mat::VectorizedMaterial, E::Real, floattype::Type{T}=Float64
+    ::Type{S}, mat::VectorizedMaterial, E::Real, floattype::Type{T}=Float64
 ) where {S<:ElasticScatteringCrossSection, T<:AbstractFloat}
     elm′, λ′ = elements[119], 1.0e308
     for index in eachindex(mat)
@@ -343,7 +343,7 @@ function randλ(
     floattype::Type{T}=Float64
 ) where {S<:ElasticScatteringCrossSection, T<:AbstractFloat}
     newpos = similar(pos)
-    quad = quadrature(n)
+    quad = quadrature(nquad)
     λ′ = λ(S, mat, E)
     r = -log(rand(T))
     rl = r * λ′

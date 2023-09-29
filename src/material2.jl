@@ -201,10 +201,10 @@ A template material with the given template, mass fractions and density.
 function MaterialTemplate(
     name::AbstractString,
     elms::AbstractArray{Element},
-    atomicmasses::Union{AbstractArray, Nothing}=nothing,
-    properties::Union{AbstractDict{Symbol,Any}, Nothing}=nothing,
     massfracfunc!::M = nothing,
     densityfunc::D = nothing,
+    atomicmasses::Union{AbstractArray, Nothing}=nothing,
+    properties::Union{AbstractDict{Symbol,Any}, Nothing}=nothing
 ) where {M, D}
     N = length(elms)
     elms = SVector{N, Element}(elms)
@@ -339,8 +339,8 @@ function Base.copy(
     mat::MTemplateMaterialSingle{<:Any, <:Any, <:Any, <:Any, <:Any, <:Any, AUTO}, lk::Union{Base.AbstractLock, Nothing}, copy_template=false
     ) where AUTO
     _template = copy_template ? copy(template(mat)) : template(mat)
-    MTemplateMaterialSingle{A}(
-        _template, copy(mat.massfracs), copy(mat.atomicfracs), copy(mat.density), copy(mat.atoms_per_g), copy(mat.properties), lk
+    MTemplateMaterialSingle{AUTO}(
+        _template, copy(mat.massfracs), copy(mat.atomicfracs), density(mat), atoms_per_g(mat), copy(mat.properties), lk
     )
 end
 density(mat::MTemplateMaterialSingle) = @inbounds mat.density[1]
@@ -366,7 +366,7 @@ struct MTemplateMaterialThreaded{N, U, V, W, D, A, AUTO, ID, IDF} <: MTemplateMa
     function MTemplateMaterialThreaded{ID}(
         default::MTemplateMaterialUnLocked{N, U, V, W, D, A, AUTO}, identifier::IDF
     ) where {N, U, V, W, D, A, AUTO, ID, IDF}
-        buffer = DefaultDict{I, MTemplateMaterialUnLocked{N, U, V, W, D, A, AUTO}}() do
+        buffer = DefaultDict{ID, MTemplateMaterialUnLocked{N, U, V, W, D, A, AUTO}}() do
             if length(buffer) > 1000
                 @warn "too many instances"
             end
@@ -389,6 +389,8 @@ template(mat::MTemplateMaterialThreaded) = mat |> instance |> template
 massfracs(mat::MTemplateMaterialThreaded) = mat |> instance |> massfracs
 atomicfracs(mat::MTemplateMaterialThreaded) = mat |> instance |> atomicfracs
 _properties(mat::MTemplateMaterialThreaded) = mat |> instance |> _properties
+density(mat::MTemplateMaterialThreaded) = mat |> instance |> density
+atoms_per_g(mat::MTemplateMaterialThreaded) = mat |> instance |> atoms_per_g
 
 Base.copy(mat::MTemplateMaterialThreaded, copy_template=true) = MTemplateMaterialThreaded(copy(instance(mat), copy_template))
 
@@ -434,7 +436,7 @@ function MTemplateMaterialSingle(
     end
     massfracs = MVector{N, U}(massfracs)
     atomicfracs, atoms_per_g = _atomicfracs_atoms_per_g(atomicmasses(template), massfracs)
-    properties = something(properties, Dict{Symbol, AbstractFloat}())
+    properties = something(properties, Dict{Symbol, Any}())
     properties[:LastPos] = lastpos
     MTemplateMaterialSingle{autoupdate}(template, massfracs, atomicfracs, density, atoms_per_g, properties, lk)
 end
@@ -542,6 +544,7 @@ function MTemplateMaterial(
     elms::AbstractVector{Element},
     massfracfunc!::Any;
     atomicmasses::Union{AbstractArray, Nothing}=nothing,
+    properties::Union{Dict{Symbol, <:Any}, Nothing}=nothing,
     densityfunc::Any=nothing,
     massfractype::Type{<:AbstractFloat}=Float64,
     kwargs...
@@ -549,7 +552,7 @@ function MTemplateMaterial(
     if isnothing(densityfunc)
         densityfunc = volume_conserving_density(elms)
     end
-    template = MaterialTemplate(name, elms, atomicmasses, properties, massfracfunc!, densityfunc)
+    template = MaterialTemplate(name, elms, massfracfunc!, densityfunc, atomicmasses, properties)
     massfracs = zero(MVector{length(template), massfractype})
     x = get(kwargs, :lastpos, zeros(3))
     try
@@ -579,7 +582,7 @@ end
     ParametricMaterial(
         name::AbstractString,
         elms::AbstractVector{Element},
-        massfracfunc!::Any,
+        massfracfunc!::Any;
         atomicmasses::Union{AbstractArray, Nothing}=nothing,
         densityfunc::Any=nothing,
         massfractype::Type{<:AbstractFloat}=Float64,

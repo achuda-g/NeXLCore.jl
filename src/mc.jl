@@ -27,33 +27,30 @@ If the ray from `pos0` towards `pos2` does not intersect `r` then this function 
 """
 const RectangularShape = Rect3{Float64}
 
-isinside(rr::RectangularShape, pos::AbstractArray{<:Real}) =
+isinside(rr::Rect3{<:Real}, pos::AbstractArray{<:Real}) =
     all(pos .≥ minimum(rr)) && all(pos .≤ maximum(rr)) # write for voxels i, i + 1
 
 function intersection(
-    rr::RectangularShape,
-    pos1::AbstractArray{<:Real},
-    pos2::AbstractArray{<:Real},
-)
-    _between(a, b, c) = (a > b) && (a < c)
-    t = Inf64
+    rr::Rect3{<:Real},
+    pos1::AbstractArray{T},
+    pos2::AbstractArray{T},
+) where T
+    _isinside = isinside(rr, pos1)
+    t::T = typemax(T)
     corner1, corner2 = minimum(rr), maximum(rr)
+    _between(t, j) = corner1[j] ≤ pos1[j] + t * (pos2[j] - pos1[j]) ≤ corner2[j]
+    _between(t, j, k) = _between(t, j) && _between(t, k)
     for i in eachindex(pos1)
         j, k = i % 3 + 1, (i + 1) % 3 + 1
         if pos2[i] != pos1[i]
-            u = (corner1[i] - pos1[i]) / (pos2[i] - pos1[i])
-            if (u > 0.0) &&
-               (u <= t) && #
-               _between(pos1[j] + u * (pos2[j] - pos1[j]), corner1[j], corner2[j]) && # 
-               _between(pos1[k] + u * (pos2[k] - pos1[k]), corner1[k], corner2[k])
-                t = u
+            v = pos2[i] - pos1[i]
+            t1 = (corner1[i] - pos1[i]) / v
+            if (t1 > 0.0) && (t1 < t) && (_isinside || _between(t1, j, k))
+                t = t1
             end
-            u = (corner2[i] - pos1[i]) / (pos2[i] - pos1[i])
-            if (u > 0.0) &&
-               (u <= t) && #
-               _between(pos1[j] + u * (pos2[j] - pos1[j]), corner1[j], corner2[j]) && # 
-               _between(pos1[k] + u * (pos2[k] - pos1[k]), corner1[k], corner2[k])
-                t = u
+            t2 = (corner2[i] - pos1[i]) / v
+            if (t2 > 0.0) && (t2 < t) && (_isinside || _between(t2, j, k))
+                t = t2
             end
         end
     end
@@ -62,22 +59,22 @@ end
 
 const SphericalShape = Sphere{Float64}
 
-isinside(sr::SphericalShape, pos::AbstractArray{<:Real}) =
+isinside(sr::Sphere{<:Real}, pos::AbstractArray{<:Real}) =
     norm(pos .- origin(sr)) < radius(sr)
 
 function intersection(
-    sr::SphericalShape,
-    pos0::AbstractArray{<:Real},
-    pos1::AbstractArray{<:Real},
-)
+    sr::Sphere{<:Real},
+    pos0::AbstractArray{T},
+    pos1::AbstractArray{T},
+) where T
     d, m = pos1 .- pos0, pos0 .- origin(sr)
     ma2, b = -2.0 * dot(d, d), 2.0 * dot(m, d)
     f = b^2 + ma2 * 2.0 * (dot(m, m) - radius(sr)^2)
     if f >= 0.0
         up, un = (b + sqrt(f)) / ma2, (b - sqrt(f)) / ma2
-        return min(up < 0.0 ? Inf64 : up, un < 0.0 ? Inf64 : un)
+        return min(up < 0.0 ? typemax(T) : up, un < 0.0 ? typemax(T) : un)
     end
-    return Inf64
+    return typemax(T)
 end
 
 """
@@ -197,6 +194,7 @@ shape(reg::AbstractRegion) = reg.shape
 parent(reg::AbstractRegion) = reg.parent
 children(reg::AbstractRegion) = reg.children
 name(reg::AbstractRegion) = reg.name
+haschildren(reg::AbstractRegion) = length(children(reg)) > 0
 
 struct Region{M} <: AbstractRegion{M}
     shape::GeometryPrimitive{3, <:AbstractFloat}
@@ -253,9 +251,11 @@ function childmost_region(reg::AbstractRegion, pos::AbstractArray{<:Real})::Abst
 end
 
 function intersection(reg::AbstractRegion, pos1::AbstractArray{<:Real}, pos2::AbstractArray{<:Real})
-    t1 = intersection(shape(reg), pos1, pos2)
-    t2 = minimum(ch -> intersection(ch, pos1, pos2), children(reg))
-    return min(t1, t2)
+    t = intersection(shape(reg), pos1, pos2)
+    if haschildren(reg)
+        t = min(t, minimum(ch -> intersection(ch, pos1, pos2), children(reg)))
+    end
+    return t
 end
 
 isinside(reg::AbstractRegion, pos::AbstractArray{<:Real}) = isinside(shape(reg), pos)
