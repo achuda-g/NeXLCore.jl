@@ -1,14 +1,14 @@
-using GeometryBasics: Point, Rect3, Sphere, GeometryPrimitive, origin, widths, radius
+using GeometryBasics: Point, Rect3, Sphere, GeometryPrimitive, origin, widths, radius, Point3
+import GeometryBasics: direction
 using LinearAlgebra: dot, norm
 using Random: rand
 using QuadGK
 
-#=
 """
 `Position` : A point in 3-D.  Ultimately, derived from StaticArray.
 """
 const Position = Point{3,Float64}
-=#
+
 """
 The MonteCarlo uses the shapes defined in GeometryBasics basics as the foundation for its 
 sample construction mechanisms.  However, GeometryBasics basics does not provide all the 
@@ -31,25 +31,24 @@ isinside(rr::Rect3{<:Real}, pos::AbstractArray{<:Real}) =
     all(pos .≥ minimum(rr)) && all(pos .≤ maximum(rr)) # write for voxels i, i + 1
 
 function intersection(
-    rr::Rect3{<:Real},
+    rr::Rect3{T},
     pos1::AbstractArray{T},
     pos2::AbstractArray{T},
-) where T
+) where {T<:Real}
     _isinside = isinside(rr, pos1)
     t::T = typemax(T)
     corner1, corner2 = minimum(rr), maximum(rr)
     _between(t, j) = corner1[j] ≤ pos1[j] + t * (pos2[j] - pos1[j]) ≤ corner2[j]
-    _between(t, j, k) = _between(t, j) && _between(t, k)
     for i in eachindex(pos1)
         j, k = i % 3 + 1, (i + 1) % 3 + 1
         if pos2[i] != pos1[i]
             v = pos2[i] - pos1[i]
             t1 = (corner1[i] - pos1[i]) / v
-            if (t1 > 0.0) && (t1 < t) && (_isinside || _between(t1, j, k))
+            if (t1 > zero(T)) && (t1 < t) && (_isinside || (_between(t1, j) && _between(t1, k)))
                 t = t1
             end
             t2 = (corner2[i] - pos1[i]) / v
-            if (t2 > 0.0) && (t2 < t) && (_isinside || _between(t2, j, k))
+            if (t2 > zero(T)) && (t2 < t) && (_isinside || (_between(t2, j) && _between(t2, k)))
                 t = t2
             end
         end
@@ -111,12 +110,13 @@ another which is translated by `λ` at a scattering angle (`θ`, `ϕ`) which ene
 
 A function that generates the values of ( `λ`, `θ`, `ϕ`, `ΔE`) for the specified `Particle` in the specified `Material`.
 """
-abstract type Particle end
+abstract type Particle{T} end
+Base.eltype(::Particle{T}) where T = T
 
-struct Electron <: Particle
-    previous::Position
-    current::Position
-    energy::Real # eV
+struct Electron{T} <: Particle{T}
+    previous::Point3{T}
+    current::Point3{T}
+    energy::T # eV
 
     """
         Electron(prev::Position, curr::Position, energy::Float64)
@@ -125,22 +125,29 @@ struct Electron <: Particle
     Create a new `Electron` from this one in which the new `Electron` is a distance `𝜆` from the
     first along a trajectory that is `𝜃` and `𝜑` off the current trajectory.
     """
-    Electron(prev::AbstractArray{<:Real}, curr::AbstractArray{<:Real}, energy::Real) =
-        new(prev, curr, energy)
+    Electron(prev::AbstractArray{T}, curr::AbstractArray{T}, energy::T) where T =
+        new{T}(prev, curr, energy)
 
-    function Electron(el::Electron, 𝜆::Real, 𝜃::Real, 𝜑::Real, ΔE::Real)
+    function Electron(prev::AbstractArray{T1}, curr::AbstractArray{T2}, energy::T3) where {T1<:Real, T2<:Real, T3<:Real}
+        T = promote_type(T1, T2, T3)
+        @debug "type promoted: ($T1, $T2, $T3) -> $T"
+        new{T}(T.(prev), T.(curr), T.(energy))
+    end
+
+    function Electron{T}(el::Electron{T}, 𝜆::T, 𝜃::T, 𝜑::T, ΔE::T) where T
         (u, v, w) = LinearAlgebra.normalize(position(el) .- previous(el))
+        cθ, sθ, cϕ, sϕ = cos(𝜃), sin(𝜃), cos(𝜑), sin(𝜑)
         sc =
-            1.0 - abs(w) > 1.0e-8 ? #
-            Position( #
-                u * cos(𝜃) + sin(𝜃) * (u * w * cos(𝜑) - v * sin(𝜑)) / sqrt(1.0 - w^2), #
-                v * cos(𝜃) + sin(𝜃) * (v * w * cos(𝜑) + u * sin(𝜑)) / sqrt(1.0 - w^2), #
-                w * cos(𝜃) - sqrt(1.0 - w^2) * sin(𝜃) * cos(𝜑), # 
+            one(T) - abs(w) > sqrt(eps(T)) ? #
+            Point3{T}( #
+                u * cθ + sθ * (u * w * cϕ - v * sϕ) / sqrt(1.0 - w^2), #
+                v * cθ + sθ * (v * w * cϕ + u * sϕ) / sqrt(1.0 - w^2), #
+                w * cθ - sqrt(1.0 - w^2) * sθ * cϕ, # 
             ) :
-            Position( #
-                sign(w) * sin(𝜃) * cos(𝜑), #
-                sign(w) * sin(𝜃) * sin(𝜑), #
-                sign(w) * cos(𝜃),
+            Point3{T}( #
+                sign(w) * sθ * cϕ, #
+                sign(w) * sθ * sϕ, #
+                sign(w) * cθ,
             )
         return new(position(el), position(el) .+ 𝜆 * sc, el.energy + ΔE)
     end
@@ -151,7 +158,7 @@ Base.position(el::Particle) = el.current
 current(el::Particle) = position(el)
 previous(el::Particle) = el.previous
 energy(el::Particle) = el.energy
-direction(el::Particle) = direction(position(el), previous(el))
+direction(el::Particle) = normalize(position(el) - previous(particle))
 
 
 """
@@ -163,11 +170,11 @@ Returns ( `λ`, `θ`, `ϕ`, `ΔE`) where `λ` is the mean path length, `θ` is t
 angle and `ΔE` is the energy loss for transport over the distance `λ`. 'Num_iterations' is the number of desired iterations for the integrations.
 """
 function transport(
-    pc::Electron,
-    mat::AbstractMaterial; #Function - elements fixed with mass fractions changing
+    pc::Electron{T},
+    mat::AbstractMaterial{T}; #Function - elements fixed with mass fractions changing
     ecx::Type{<:ElasticScatteringCrossSection}=Liljequist1989,
     bethe::Type{<:BetheEnergyLoss}=JoyLuo,
-)
+)::NTuple{4, T} where T
     (𝜆′, θ′, ϕ′) = rand(ecx, mat, pc.energy) 
     return (𝜆′, θ′, ϕ′, 𝜆′ * dEds(bethe, pc.energy, mat))
 end
@@ -188,7 +195,7 @@ intersection(r, p::Particle) = intersection(r, previous(p), position(p))
 A `Region` combines a geometric primative and a `Material` (with `:Density` property) and may fully contain zero or more child `Region`s.
 """
 
-abstract type AbstractRegion{M} end
+abstract type AbstractRegion end
 material(reg::AbstractRegion) = reg.material
 shape(reg::AbstractRegion) = reg.shape
 parent(reg::AbstractRegion) = reg.parent
@@ -196,26 +203,26 @@ children(reg::AbstractRegion) = reg.children
 name(reg::AbstractRegion) = reg.name
 haschildren(reg::AbstractRegion) = length(children(reg)) > 0
 
-struct Region{M} <: AbstractRegion{M}
-    shape::GeometryPrimitive{3, <:AbstractFloat}
+struct Region{S, M} <: AbstractRegion
+    shape::S
     material::M
     parent::Union{Nothing,AbstractRegion}
-    children::Vector{AbstractRegion}
+    children::Set{AbstractRegion}
     name::String
 
     function Region(
-        sh::T,
-        mat::M,
+        sh::GeometryPrimitive{3},
+        mat::AbstractMaterial,
         parent::Union{Nothing,AbstractRegion},
         name::Union{Nothing,String} = nothing,
         ntests = 1000,
-    ) where {T, M}
+    )
         #@assert mat[:Density] > 0.0 # Glen - removed
         name = something(
             name,
             isnothing(parent) ? "Root" : "$(parent.name)[$(length(parent.children)+1)]",
         )
-        res = new{M}(sh, mat, parent, AbstractRegion[], name)
+        res = new{typeof(sh), typeof(mat)}(sh, mat, parent, Set{AbstractRegion}(), name)
         if !isnothing(parent)
             @assert all(
                 _ -> isinside(parent.shape, random_point_inside(sh)),
@@ -229,7 +236,6 @@ struct Region{M} <: AbstractRegion{M}
                 parent.children,
             ) "The child $sh overlaps a child of the parent shape."
             push!(parent.children, res)
-        else
         end
         return res
     end
@@ -245,20 +251,22 @@ Base.show(io::IO, reg::Region) = print(
 
 Find the inner-most `Region` within `reg` containing the point `pos`.
 """
-function childmost_region(reg::AbstractRegion, pos::AbstractArray{<:Real})::AbstractRegion
+function childmost_region_(reg::AbstractRegion, pos::AbstractArray{<:Real})
     res = findfirst(ch -> isinside(shape(ch), pos), children(reg))
     return !isnothing(res) ? childmost_region(children(reg)[res], pos) : reg
 end
 
-function intersection(reg::AbstractRegion, pos1::AbstractArray{<:Real}, pos2::AbstractArray{<:Real})
-    t = intersection(shape(reg), pos1, pos2)
-    if haschildren(reg)
-        t = min(t, minimum(ch -> intersection(ch, pos1, pos2), children(reg)))
+function childmost_region(reg::AbstractRegion, pos::AbstractArray{<:Real})
+    for ch in children(reg)
+        if isinside(shape(ch), pos)
+            return childmost_region(ch, pos)
+        end
     end
-    return t
+    return reg
 end
 
 isinside(reg::AbstractRegion, pos::AbstractArray{<:Real}) = isinside(shape(reg), pos)
+isinside(reg::Any, p::Particle) = isinside(reg, position(p))
 
 """
     take_step(p::T, reg::Region, 𝜆::Float64, 𝜃::Float64, 𝜑::Float64)::Tuple{T, Region, Bool} where { T<: Particle}
@@ -270,25 +278,29 @@ to the current direction of `p` via the scatter angles `𝜃` and `𝜑`.
 Returns the updated `Particle` reflecting the last trajectory step and the Region for the next step.
 """
 function take_step(
-    p::T,
-    reg::Region,
-    𝜆::Real,
-    𝜃::Real,
-    𝜑::Real,
-    ΔE::Real,
-    ϵ::Real = 1.0e-12,
-) where {T<:Particle}
-    newP, nextReg = T(p, 𝜆, 𝜃, 𝜑, ΔE), reg
-    t = min(
-        intersection(shape(reg), newP), # Leave this Region?
-        (intersection(shape(ch), newP) for ch in children(reg))..., # Enter a new child Region?
-    )
-    scatter = t > 1.0
-    if !scatter # Enter new region
-        newP = T(p, (t + ϵ) * 𝜆, 𝜃, 𝜑, (t + ϵ) * ΔE)
-        nextReg = childmost_region(isnothing(parent(reg)) ? reg : parent(reg), position(newP))
+    p::P,
+    reg::AbstractRegion,
+    𝜆::T,
+    𝜃::T,
+    𝜑::T,
+    ΔE::T,
+    ϵ::T,
+)::Tuple{P, Bool} where {P<:Particle, T}
+    newP::P = P(p, 𝜆, 𝜃, 𝜑, ΔE)
+    pos1, pos2 = previous(newP), position(newP)
+    t = intersection(shape(reg), pos1, pos2)
+    for ch in children(reg)
+        tch = intersection(shape(ch), pos1, pos2)
+        if tch < t 
+            t = tch
+        end
     end
-    return (newP, nextReg, scatter)
+    scatter = t > one(T)
+    if !scatter # Enter new Region
+        𝜆new = t*𝜆 + ϵ
+        newP = P(p, 𝜆new, 𝜃, 𝜑, 𝜆new / 𝜆 * ΔE)
+    end
+    return (newP, scatter)
 end
 
 
@@ -307,18 +319,26 @@ Run a single particle trajectory from `p` to `minE` or until the particle exits 
 """
 function trajectory(
     eval::Function,
-    p::T,
+    p::P,
     reg::AbstractRegion,
     scf::Function,
     terminate::Function,
-) where {T<:Particle}
-    (pc, nextr) = (p, childmost_region(reg, position(p)))
-    θ, ϕ = 0.0, 0.0
+) where {P<:Particle}
+    pc::P = p
+    nextr::AbstractRegion = childmost_region(reg, position(p))
+    T = eltype(p)
+    θ::T = zero(T)
+    ϕ::T = zero(T)
     while (!terminate(pc, reg)) && isinside(shape(reg), position(pc))
         prevr = nextr
-        (λ, θₙ, ϕₙ, ΔZ) = scf(pc, nextr.material) 
-        (pc, nextr, scatter) = take_step(pc, nextr, λ, θ, ϕ, ΔZ)
-        (θ, ϕ) = scatter ? (θₙ, ϕₙ) : (0.0, 0.0) # scatter true? New angles. False? Old angles. 
+        (λ, θₙ, ϕₙ, ΔZ) = scf(pc, material(prevr))
+        (pc, scatter) = take_step(pc, prevr, λ, θ, ϕ, ΔZ, T(1e-14))
+        if scatter
+            (θ, ϕ) = (θₙ, ϕₙ) # scatter true? New angles. False? Old angles.
+        else
+            (θ, ϕ) = (zero(T), zero(T))
+            nextr = childmost_region(isnothing(parent(reg)) ? reg : parent(reg), position(pc))
+        end
         eval(pc, prevr)
     end
 end

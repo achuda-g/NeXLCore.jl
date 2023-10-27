@@ -1,4 +1,5 @@
 using StaticArrays
+using GeometryBasics: Point3
 
 # Utils
 function volume_conserving_density(elms::AbstractArray{Element})
@@ -17,22 +18,22 @@ end
 cpu_current_task_id() = objectid(current_task())
 
 """
-Abstract type for defining Materials which Hold basic data about a material in Vector-like form for fast arithmetic.
+    VectorizedMaterial{N, T} <: AbstractMaterial{T, T}
 
-It is a parametric subtype of `AbstractMaterial{U, V}`. `N` is the number of elements. `W` is the element type of atomic fractions.
+Abstract type for defining Materials which Hold basic data about a material in Vector-like form for fast arithmetic.
+It is a parametric subtype of `AbstractMaterial{T, T}`. `N` is the number of elements. `T` is the type for all floating point fields.
 In addition to `name`, and `properties` as in `AbstractMaterial`, all subtypes must contain the following fields or methods.
     +`elms:AbstractVector{Element}` or `elms_vec(mat)` - vector of elements.
-    +`massfracs:AbstractVector{U}` or `massfracs(mat)` - vector of mass fractions in the same order as `elms`.
-    +`a:AbstractVector{V}` or `atomicmasses(mat)` - vector of atomic numbers in the same order as `elms`.
-    +`atomicfracs::AbstractVectror{W}` or `atomicfracs(mat)` - vector of atomic fractions in the same order as `elms`.
+    +`massfracs:AbstractVector{T}` or `massfracs(mat)` - vector of mass fractions in the same order as `elms`.
+    +`a:AbstractVector{T}` or `atomicmasses(mat)` - vector of atomic numbers in the same order as `elms`.
+    +`atomicfracs::AbstractVectror{T}` or `atomicfracs(mat)` - vector of atomic fractions in the same order as `elms`.
     +`elmdict:Dict{Element, Int}` or `elmdict(mat)` - a mapping from element to integer index of the ement in `elms`.
-    +`density::D` or `density(mat)` - density of the material
-    +`atoms_per_g::A` or `atoms_per_g(mat)` - no oof atoms in 1 g of the material`
+    +`density::T` or `density(mat)` - density of the material
+    +`atoms_per_cm³::T` or `atoms_per_cm³(mat)` - no oof atoms in 1 g of the material`
 
-`U`, `V`, `W`, `D` and `A` are typically but not necessarily all `AbstractFloat`s.
-Some functionalities only work when `elms`, `massfracs` and `a` have regular indexin, i.e. starting with 1 and with increments of 1.
+Some functionalities only work when `elms`, `massfracs` and `a` have regular indexing, i.e. starting with `1` and with increments of `1` upto `N`.
 """
-abstract type VectorizedMaterial{N, U, V, W, D, A} <: AbstractMaterial{U, V} end
+abstract type VectorizedMaterial{N, T} <: AbstractMaterial{T, T} end
 
 Base.length(::VectorizedMaterial{N}) where N = N
 
@@ -71,10 +72,12 @@ density(mat::VectorizedMaterial) = mat.density
 elmdict(mat::VectorizedMaterial) = mat.elmdict
 
 
-Base.getindex(mat::VectorizedMaterial{<:Any, U}, elm::Element) where U =
+function Base.getindex(mat::VectorizedMaterial{<:Any, T}, elm::Element)::T where T
     get(mat.massfracs, get(elmdict(mat), elm, 0), zero(U))
-Base.getindex(mat::VectorizedMaterial{<:Any, U}, z::Int) where U =
+end
+function Base.getindex(mat::VectorizedMaterial{<:Any, T}, z::Int)::T where T
     get(mat, elements[z], zero(U))
+end
 function Base.getindex(mat::VectorizedMaterial, sym::Symbol)
     if sym == :Density
         return density(mat)
@@ -91,7 +94,7 @@ Base.show(io::IO, m::MIME"text/plain", mat::VectorizedMaterial) = _show(io, m, m
 Base.show(io::IO, mat::VectorizedMaterial) = _show(io, nothing, mat)
 
 typestr(mat::VectorizedMaterial, ::MIME"text/plain") = "$(length(mat))-element $(typeof(mat)):"
-typestr(mat::VectorizedMaterial, ::Any) = split("$(typeof(mat))", "{")[1]
+typestr(mat::VectorizedMaterial, ::Nothing) = split("$(typeof(mat))", "{")[1]
 
 _repr(val::AbstractFloat) = "$val"
 _repr(val::Union{Float64, Float32}) = @sprintf("%.6g", val)
@@ -104,14 +107,14 @@ function massfracstr(mat::VectorizedMaterial, ::MIME"text/plain")
     end
     return res
 end
-function massfracstr(mat::VectorizedMaterial, ::Any)
+function massfracstr(mat::VectorizedMaterial, ::Nothing)
     elms = sort(elms_vector(mat))
     _str(elm) = "$(symbol(elm)) => $(_repr(massfrac(mat, elm)))"
     return "[" * join((_str(elm) for elm in elms), ", ") * "], "
 end
 
 densitystr(mat::VectorizedMaterial, ::MIME"text/plain") = "\nMass density: $(_repr(density(mat))) $(u"g/cm^3")"
-densitystr(mat::VectorizedMaterial, ::Any) = "ρ = $(_repr(density(mat))) $(u"g/cm^3")}"
+densitystr(mat::VectorizedMaterial, ::Nothing) = "ρ = $(_repr(density(mat))) $(u"g/cm^3")}"
 
 a(elm::Element, mat::VectorizedMaterial) = get(atomicmasses(mat), get(elmdict(mat), elm, 0), a(elm))
 
@@ -119,51 +122,54 @@ a(elm::Element, mat::VectorizedMaterial) = get(atomicmasses(mat), get(elmdict(ma
 elm(mat::VectorizedMaterial, index::Integer) = getindex(elms_vector(mat), index)
 # Same as elm but doesn't check if index in bounds. Can be unsafe. Use only with eachindex.
 elm_nocheck(mat::VectorizedMaterial, index::Integer) = @inbounds elms_vector(mat)[index]
-massfrac(mat::VectorizedMaterial{<:Any, U}, index::Integer) where U = get(massfracs(mat), index, zero(U))
+massfrac(mat::VectorizedMaterial{<:Any, T}, index::Integer) where T = get(massfracs(mat), index, zero(T))
 massfrac(mat::VectorizedMaterial, elm::Element) = massfrac(mat, get(elmdict(mat), elm, 0))
 atomicmass(mat::VectorizedMaterial, index::Integer) = getindex(atomicmasses(mat), index)
-atomicfrac(mat::VectorizedMaterial{<:Any, <:Any, <:Any, W}, index::Integer) where W = get(atomicfracs(mat), index, zero(W))
+atomicfrac(mat::VectorizedMaterial{<:Any, T}, index::Integer) where T = get(atomicfracs(mat), index, zero(T))
 atomicfrac(mat::VectorizedMaterial, elm::Element) = atomicfrac(mat, get(elmdict(mat), elm, 0))
 
-_atoms_per_g(mat::VectorizedMaterial, index::Integer) =  massfrac(mat, index) / atomicmass(mat, index) * _AVAGADRO
+function _atoms_per_g(mat::VectorizedMaterial{<:Any, T}, index::Integer)::T where T
+    massfrac(mat, index) / atomicmass(mat, index) * _AVAGADRO(T)
+end
 
 function _atomicfracs_atoms_per_g!(
-    atomicfracs::AbstractArray{<:AbstractFloat}, atomicmasses::AbstractArray{<:Real}, massfracs::AbstractArray{<:Real}
-)
+    atomicfracs::AbstractArray{T}, atomicmasses::AbstractArray{T}, massfracs::AbstractArray{T}
+)::T where T
     atomicfracs .= massfracs ./ atomicmasses
     tmp = sum(atomicfracs)
     if tmp == zero(tmp)
-        @warn "in `_atomicfracs_atoms_per_g!`: massfracs are zero?"
+        @warn "encountered divide by zero in `_atomicfracs_atoms_per_g!`"
     end
     atomicfracs ./= tmp
-    return tmp * _AVAGADRO
+    return tmp * _AVAGADRO(T)
 end
-function _atomicfracs_atoms_per_g(atomicmasses::AbstractArray{T1}, massfracs::AbstractArray{T2}) where {T1, T2}
-    T = promote_type(T1, T2)
-    atomicfracs = zero(MVector{length(atomicmasses), T})
-    atoms_per_g = _atomicfracs_atoms_per_g!(atomicfracs, atomicmasses, massfracs)
-    return atomicfracs, atoms_per_g
+function _atomicfracs_atoms_per_g(atomicmasses::AbstractArray{T}, massfracs::AbstractArray{T}) where T
+    atomicfracs = massfracs ./ atomicmasses
+    tmp = sum(atomicfracs)
+    if tmp == zero(tmp)
+        @warn "encountered divide by zero in `_atomicfracs_atoms_per_g`"
+    end
+    return atomicfracs ./ tmp, tmp * _AVAGADRO(T)
 end
 
-atoms_per_g(mat::VectorizedMaterial) = mat.atoms_per_g
-atoms_per_g(mat::VectorizedMaterial, elm::Element) = atomicfrac(mat, elm) * atoms_per_g(mat)
-atoms_per_g(mat::VectorizedMaterial, index::Integer) = atomicfrac(mat, index) * atoms_per_g(mat)
-
-atoms_per_cm³(mat::VectorizedMaterial, index::Integer) = atoms_per_g(mat, index) * density(mat)
+atoms_per_g(mat::VectorizedMaterial) = mat.atoms_per_cm³ / density(mat)
+atoms_per_g(mat::VectorizedMaterial, index::Union{Element, Integer}) = atomicfrac(mat, index) * atoms_per_g(mat)
+atoms_per_cm³(mat::VectorizedMaterial) = mat.atoms_per_cm³
+atoms_per_cm³(mat::VectorizedMaterial, index::Union{Element, Integer}) = atomicfrac(mat, index) * atoms_per_cm³(mat)
 
 """
     atoms_per_g_all(mat::VectorizedMaterial)
 
 The number of atoms of each element in 1 g of the material as a vector.
 """
-atoms_per_g_all(mat::VectorizedMaterial) = [atoms_per_g_inbounds(mat, i) for i in eachindex(mat)]
+atoms_per_g_all(mat::VectorizedMaterial) = atomicfracs(mat) .* atoms_per_g(mat)
 
 """
     atoms_per_cm³_all(mat::VectorizedMaterial)
 
 The number of atoms of each element in 1 cm³ of the material as a vector.
 """
-atoms_per_cm³_all(mat::VectorizedMaterial) = atoms_per_g_all(mat) .* density(mat)
+atoms_per_cm³_all(mat::VectorizedMaterial) = atomicfracs(mat) .* atoms_per_cm³(mat)
 
 function mac(mat::VectorizedMaterial, energy::Real, alg::Type{<:NeXLAlgorithm}=DefaultAlgorithm)
     return sum(eachindex(mat)) do i
@@ -176,10 +182,10 @@ function mac(mat::VectorizedMaterial, xray::CharXRay, alg::Type{<:NeXLAlgorithm}
     end
 end
 
-struct MaterialTemplate{N, V<:AbstractFloat, M, D} <: VectorizedMaterial{N, Nothing, V, Nothing, Nothing, Nothing}
+struct MaterialTemplate{N, T<:AbstractFloat, M, D} <: VectorizedMaterial{N, T}
     name::String
     elms::SVector{N, Element}
-    a::SVector{N, V}
+    a::SVector{N, T}
     elmdict::Dict{Element, Int}
     properties::Dict{Symbol, Any}
     massfracfunc!::M
@@ -188,38 +194,54 @@ end
 
 """
     function MaterialTemplate(
+        ::Type{<:AbstractFloat},
         name::AbstractString,
         elms::AbstractArray{Element},
         atomicmasses::Union{AbstractArray, Nothing}=nothing,
         properties::Union{AbstractDict{Symbol,Any}, Nothing}=nothing,
-        massfracfunc!::M = nothing,
-        densityfunc::D = nothing,
-    ) where {M, D}
+        massfracfunc!::Any = nothing,
+        densityfunc::Any = nothing,
+    )
+    function MaterialTemplate(
+        name::AbstractString,
+        elms::AbstractArray{Element},
+        massfracfunc!::Any = nothing,
+        densityfunc::Any = nothing,
+        atomicmasses::Union{AbstractArray, Nothing}=nothing,
+        properties::Union{AbstractDict{Symbol,Any}, Nothing}=nothing
+    )
 
 A template material with the given template, mass fractions and density.
 """
 function MaterialTemplate(
+    ::Type{T},
     name::AbstractString,
     elms::AbstractArray{Element},
-    massfracfunc!::M = nothing,
-    densityfunc::D = nothing,
+    massfracfunc!::Any = nothing,
+    densityfunc::Any = nothing,
     atomicmasses::Union{AbstractArray, Nothing}=nothing,
     properties::Union{AbstractDict{Symbol,Any}, Nothing}=nothing
-) where {M, D}
+) where {T<:AbstractFloat}
     N = length(elms)
     elms = SVector{N, Element}(elms)
-    if isnothing(atomicmasses)
-        atomicmasses = a.(elms)
-    elseif length(atomicmasses) != N
+    atomicmasses = something(atomicmasses, a.(elms))
+    if length(atomicmasses) != N
         error("size of atomicmasses doesn't match elms")
     end
-    if isnothing(properties)
-        properties = Dict{Symbol, Any}()
-    end
-    V = eltype(atomicmasses)
-    atomicmasses = SVector{N, V}(atomicmasses)
+    properties = something(properties, Dict{Symbol, Any}())
+    atomicmasses = SVector{N, T}(T.(atomicmasses))
     elmdict = Dict((elms[i] => i for i in eachindex(elms)))
-    MaterialTemplate(name, elms, atomicmasses, elmdict, properties, massfracfunc!, densityfunc)
+    MaterialTemplate(String(name), elms, atomicmasses, elmdict, properties, massfracfunc!, densityfunc)
+end
+function MaterialTemplate(
+    name::AbstractString,
+    elms::AbstractArray{Element},
+    massfracfunc!::Any = nothing,
+    densityfunc::Any = nothing,
+    atomicmasses::Union{AbstractArray, Nothing}=nothing,
+    properties::Union{AbstractDict{Symbol,Any}, Nothing}=nothing
+)
+    MaterialTemplate(Float64,name, elms, massfracfunc!, densityfunc, atomicmasses, properties)
 end
 
 _mat_temp_call_error() = error("This function shouldn't be called on an instance of `MaterialTemplate`")
@@ -227,13 +249,11 @@ _mat_temp_call_error() = error("This function shouldn't be called on an instance
 massfracs(::MaterialTemplate) = _mat_temp_call_error()
 atomicfracs(::MaterialTemplate) = _mat_temp_call_error()
 density(::MaterialTemplate) = _mat_temp_call_error()
-atoms_per_g(::MaterialTemplate) = _mat_temp_call_error()
+atoms_per_cm³(::MaterialTemplate) = _mat_temp_call_error()
 Base.getindex(::MaterialTemplate, ::Element) = _mat_temp_call_error()
 Base.getindex(::MaterialTemplate, ::Integer) = _mat_temp_call_error()
 massfracfunc!(mat::MaterialTemplate) = mat.massfracfunc!
-massfracfunc!(::MaterialTemplate{<:Any, <:Any, Nothing}) = error("massfracfunc! not defined in this template")
 densityfunc(mat::MaterialTemplate) = mat.densityfunc
-densityfunc(::MaterialTemplate{<:Any, <:Any, <:Any, Nothing}) = error("massfracfunc! not defined in this template")
 function massfracstr(mat::MaterialTemplate, ::MIME"text/plain")
     elms = sort(elms_vector(mat))
     res = "\nElements:\n"
@@ -258,7 +278,8 @@ function Base.copy(mat::MaterialTemplate)
     )
 end
 
-abstract type TemplateMaterial{N, U, V, W, D, A} <: VectorizedMaterial{N, U, V, W, D, A} end
+abstract type TemplateMaterial{N, T, AUTO} <: VectorizedMaterial{N, T} end
+const ParametricMaterial{N, T} = TemplateMaterial{N, T, true}
 
 template(mat::TemplateMaterial) = mat.template
 name(mat::TemplateMaterial) = mat |> template |> name
@@ -269,118 +290,172 @@ elmdict(mat::TemplateMaterial) = mat |> template |> elmdict
 massfracfunc!(mat::TemplateMaterial) = mat |> template |> massfracfunc!
 densityfunc(mat::TemplateMaterial) = mat |> template |> densityfunc
 
-struct STemplateMaterial{N, U<:AbstractFloat, V, W<:AbstractFloat, D<:AbstractFloat, A<:AbstractFloat} <: TemplateMaterial{N, U, V, W, D, A}
-    template::MaterialTemplate{N, V}
-    massfracs::SVector{N, U}
-    atomicfracs::SVector{N, W}
-    density::D
-    atoms_per_g::A
+evaluateat(eval, mat::TemplateMaterial, pos::AbstractVector) = eval(instance(mat, pos))
+
+function Base.setindex!(mat::TemplateMaterial, val, sym::Symbol)
+    setindex!(properties(mat), val, sym)
+    @warn "Altered `properties` of template of $mat. This propogates to all materials using the same template"
+end
+
+struct STemplateMaterial{N, T<:AbstractFloat, M , D} <: TemplateMaterial{N, T, false}
+    template::MaterialTemplate{N, T, M, D}
+    massfracs::SVector{N, T}
+    atomicfracs::SVector{N, T}
+    density::T
+    atoms_per_cm³::T
 end
 
 
 """
-    STemplateMaterial(template::MaterialTemplate{N, V}, massfracs::AbstractVector{U}, density::AbstractFloat) where {N, U, V}
-    STemplateMaterial(mat::TemplateMaterial, massfracs::AbstractVector, density::AbstractFloat)
+    STemplateMaterial(template::MaterialTemplate{N, T}, massfracs::AbstractVector{T}, density::AbstractFloat) where {N, T}
+    STemplateMaterial(mat::TemplateMaterial, massfracs::AbstractVector{T}, density::T) where {N, T}
 
-A template material with the given template, mass fractions, atomic fractions, density and atoms/g.
+A template material with the given template, mass fractions and density.
 """
-function STemplateMaterial(template::MaterialTemplate{N, V}, massfracs::AbstractVector{U}, density::AbstractFloat) where {N, U, V}
-    if length(massfracs) != N
-        error("massfracs has a wrong length")
-    end
-    massfracs = SVector{N, U}(massfracs)
+function STemplateMaterial(template::MaterialTemplate{N, T}, massfracs::AbstractVector{T}, density::T) where {N, T}
+    massfracs = SVector{N, T}(massfracs)
     atomicfracs, atoms_per_g = _atomicfracs_atoms_per_g(atomicmasses(template), massfracs)
-    STemplateMaterial(template, massfracs, SVector(atomicfracs), density, atoms_per_g)
+    return STemplateMaterial(template, massfracs, SVector(atomicfracs), density, atoms_per_g * density)
 end
-function STemplateMaterial(mat::TemplateMaterial, massfracs::AbstractVector, density::AbstractFloat)
-    STemplateMaterial(template(mat), massfracs, density)
+function STemplateMaterial(mat::TemplateMaterial{N, T}, massfracs::AbstractVector{T}, density::T) where {N, T}
+    return STemplateMaterial(template(mat), massfracs, density)
 end
+function STemplateMaterial(template, pos::AbstractVector)
+    return instance(SParametricMaterial(template), pos)
+end
+
 
 function Base.copy(mat::STemplateMaterial, copy_template::Bool=false)
     _template = copy_template ? copy(template(mat)) : template(mat)
-    STemplateMaterial(_template, mat.massfracs, mat.atomicfracs, mat.density, mat.atoms_per_g)
+    return STemplateMaterial(_template, mat.massfracs, mat.atomicfracs, mat.density, mat.atoms_per_cm³)
 end
 
-abstract type MTemplateMaterial{N, U, V, W, D, A, AUTO} <: TemplateMaterial{N, U, V, W, D, A} end
-const ParametricMaterial{N, U, V, W, D, A} = MTemplateMaterial{N, U, V, W, D, A, true}
+struct SParametricMaterial{N, T<:AbstractFloat, M , D} <: TemplateMaterial{N, T, true}
+    template::MaterialTemplate{N, T, M, D}
 
-# Parametric Material
-struct MTemplateMaterialSingle{N, U<:AbstractFloat, V<:AbstractFloat, W<:AbstractFloat, D, A, AUTO, L} <: MTemplateMaterial{N, U, V, W, D, A, AUTO}
-    template::MaterialTemplate{N, V}
-    massfracs::MVector{N, U}
-    atomicfracs::MVector{N, W}
-    density::MVector{1, D}
-    atoms_per_g::MVector{1, A}
-    properties::Dict{Symbol, Any}
-    lk::L
+    """
+        SParametricMaterial(temp::MaterialTemplate)
 
-    function MTemplateMaterialSingle{AUTO}(
-        template::MaterialTemplate{N, V}, massfracs::MVector{N, U}, atomicfracs::MVector{N, W}, 
-        density::D, atoms_per_g::A, properties::Dict, lk::L
-    ) where {AUTO, N, U, V, W, D, A, L}
-        new{N, U, V, W, D, A, AUTO, L}(template, massfracs, atomicfracs, MVector{1, D}(density), MVector{1, A}(atoms_per_g), properties, lk)
+    A template material that doesn't cache any values but returns a `STemplateMaterial` when called with `instance`.
+    """
+    function SParametricMaterial(temp::MaterialTemplate{N, T, M, D}) where {N, T, M, D}
+        testpos = zero(Point3{T})
+        mfracs = massfracfunc!(temp)(T, testpos)
+        if !(mfracs isa AbstractVector{T} && length(mfracs) == N)
+            error("template must have a massfracfunc! that returns a subtype of AbstractVector of length $N")
+        end
+        if !(typeof(densityfunc(temp)(mfracs, testpos)) == T)
+            error("template must have a densityfunc that returns a scalar $T")
+        end
+        return new{N, T, M, D}(temp)
     end
 end
 
-_properties(mat::MTemplateMaterialSingle) = mat.properties
+function instance(mat::SParametricMaterial{N, T}, pos::AbstractVector{<:Real}) where {N, T}
+    massfracs = massfracfunc!(mat)(T, pos)
+    density = densityfunc(mat)(massfracs, pos)
+    return STemplateMaterial(mat, massfracs, density)
+end
+
+function massfracstr(mat::SParametricMaterial, ::MIME"text/plain")
+    elms = sort(elms_vector(mat))
+    res = "\nElements:"
+    for elm in elms
+        res *= "\n\t$(symbol(elm))(Z=$(z(elm)), A=$(_repr(a(elm, mat))))"
+    end
+    return res
+end
+function massfracstr(mat::SParametricMaterial, ::Nothing)
+    elms = sort(elms_vector(mat))
+    _str(elm) = "$(symbol(elm))"
+    return "[" * join((_str(elm) for elm in elms), ", ") * "], "
+end
+densitystr(::SParametricMaterial, ::MIME{Symbol("text/plain")}) = ""
+densitystr(::SParametricMaterial, ::Nothing) = ""
+
+abstract type MTemplateMaterial{N, T, AUTO} <: TemplateMaterial{N, T, AUTO} end
+# Parametric Material
+mutable struct MTemplateMaterialSingle{N, T, AUTO, L, M, D} <: MTemplateMaterial{N, T, AUTO}
+    const template::MaterialTemplate{N, T, M, D}
+    const massfracs::SizedVector{N, T, Vector{T}}
+    const atomicfracs::SizedVector{N, T, Vector{T}}
+    density::T
+    atoms_per_cm³::T
+    const lock::L
+    const poscache::SizedVector{3, T, Vector{T}}
+
+    function MTemplateMaterialSingle{AUTO}(
+        template::MaterialTemplate{N, T, M, D}, massfracs::SizedVector{N, T, Vector{T}}, atomicfracs::SizedVector{N, T, Vector{T}}, 
+        density::T, atoms_per_cm³::T, lock::L, pos::SizedVector{3, T, Vector{T}}
+    ) where {AUTO, N, T, M, D, L<:Union{Nothing, Base.AbstractLock}}
+        new{N, T, AUTO, L, M, D}(template, massfracs, atomicfracs, density, atoms_per_cm³, lock, pos)
+    end
+end
+
+position_cache(mat::MTemplateMaterialSingle) = mat.poscache
+
 function Base.copy(mat::MTemplateMaterialSingle, copy_template=false)
-    lk = nothing
-    if !isnothing(mat.lk)
+    lock = nothing
+    if !isnothing(mat.lock)
         try
-            lk = typeof(mat.lk)()
+            lock = typeof(mat.lock)()
+            @warn "`mat.lock` could have been copied eroneously"
         catch ex
-            println("lock $(mat.lk) could not be copied")
+            println("lock $(mat.lock) could not be copied")
             throw(ex)
         end 
     end
-    copy(mat, lk, copy_template)
+    copy(mat, lock, copy_template)
 end
 function Base.copy(
-    mat::MTemplateMaterialSingle{<:Any, <:Any, <:Any, <:Any, <:Any, <:Any, AUTO}, lk::Union{Base.AbstractLock, Nothing}, copy_template=false
+    mat::MTemplateMaterialSingle{<:Any, <:Any, AUTO}, lock::Union{Base.AbstractLock, Nothing}, copy_template=false
     ) where AUTO
     _template = copy_template ? copy(template(mat)) : template(mat)
     MTemplateMaterialSingle{AUTO}(
-        _template, copy(mat.massfracs), copy(mat.atomicfracs), density(mat), atoms_per_g(mat), copy(mat.properties), lk
+        _template, copy(mat.massfracs), copy(mat.atomicfracs), mat.density, mat.atoms_per_cm³, lock, copy(mat.poscache)
     )
 end
-density(mat::MTemplateMaterialSingle) = @inbounds mat.density[1]
-atoms_per_g(mat::MTemplateMaterialSingle) = @inbounds mat.atoms_per_g[1]
 
 # Parametric Material
-const MTemplateMaterialLocked{N, U, V, W, D, A, AUTO} = MTemplateMaterialSingle{N, U, V, W, D, A, AUTO, <:Base.AbstractLock}
-const MTemplateMaterialUnLocked{N, U, V, W, D, A, AUTO} = MTemplateMaterialSingle{N, U, V, W, D, A, AUTO, Nothing}
+const MTemplateMaterialLocked{N, T, AUTO} = MTemplateMaterialSingle{N, T, AUTO, <:Base.AbstractLock}
+const MTemplateMaterialUnLocked{N, T, AUTO} = MTemplateMaterialSingle{N, T, AUTO, Nothing}
 
 function locked(eval, mat::MTemplateMaterialLocked)
-    lock(mat.lk)
+    lock(mat.lock)
     try
         return eval(mat)
     finally
-        unlock(mat)
+        unlock(mat.lock)
+    end
+end
+function evaluateat(eval, mat::MTemplateMaterialLocked, pos::AbstractVector)
+    locked(mat) do mat_
+        eval(instance(mat_, pos))
     end
 end
 
-struct MTemplateMaterialThreaded{N, U, V, W, D, A, AUTO, ID, IDF} <: MTemplateMaterial{N, U, V, W, D, A, AUTO}
-    buffer::DefaultDict{ID, MTemplateMaterialUnLocked{N, U, V, W, D, A, AUTO}}
+struct MTemplateMaterialThreaded{N, T, AUTO, ID, IDF, M, D} <: MTemplateMaterial{N, T, AUTO}
+    buffer::DefaultDict{ID, MTemplateMaterialUnLocked{N, T, AUTO, M, D}}
     identifier::IDF
 
     function MTemplateMaterialThreaded{ID}(
-        default::MTemplateMaterialUnLocked{N, U, V, W, D, A, AUTO}, identifier::IDF
-    ) where {N, U, V, W, D, A, AUTO, ID, IDF}
-        buffer = DefaultDict{ID, MTemplateMaterialUnLocked{N, U, V, W, D, A, AUTO}}() do
-            if length(buffer) > 1000
-                @warn "too many instances"
+        default::MTemplateMaterialUnLocked{N, T, AUTO, M, D}, identifier::IDF
+    ) where {N, T, M, D, AUTO, ID, IDF}
+        buffer = DefaultDict{ID, MTemplateMaterialUnLocked{N, T, AUTO, M, D}}() do
+            if length(buffer) > 100
+                @warn "maybe too many instances"
             end
             copy(default, false)
         end
         try
             id = identifier()
             if typeof(id) != ID
-                @warn "the type returned by `identifier()` is not the same as `ID`, this can be different during runtime"
+                @warn "the type returned by `identifier()` is not $ID. This could be different during runtime"
             end
         catch
             @warn "could not validate `identifier`"
         end
-        new{N, U, V, W, D, A, AUTO, ID, IDF}(buffer, identifier)
+        new{N, T, AUTO, ID, IDF, M, D}(buffer, identifier)
     end
 end
 
@@ -388,26 +463,27 @@ instance(mat::MTemplateMaterialThreaded) = mat.buffer[mat.identifier()]
 template(mat::MTemplateMaterialThreaded) = mat |> instance |> template
 massfracs(mat::MTemplateMaterialThreaded) = mat |> instance |> massfracs
 atomicfracs(mat::MTemplateMaterialThreaded) = mat |> instance |> atomicfracs
-_properties(mat::MTemplateMaterialThreaded) = mat |> instance |> _properties
 density(mat::MTemplateMaterialThreaded) = mat |> instance |> density
-atoms_per_g(mat::MTemplateMaterialThreaded) = mat |> instance |> atoms_per_g
+atoms_per_cm³(mat::MTemplateMaterialThreaded) = mat |> instance |> atoms_per_cm³
 
 Base.copy(mat::MTemplateMaterialThreaded, copy_template=true) = MTemplateMaterialThreaded(copy(instance(mat), copy_template))
 
-properties(mat::MTemplateMaterial) = merge(template(mat), _properties(mat))
-Base.getindex(mat::MTemplateMaterial, sym::Symbol) = get(_properties(mat), sym, getindex(properties(template(mat)), sym))
-Base.get(mat::MTemplateMaterial, sym::Symbol, def) = get(_properties(mat), sym,  get(properties(template(mat)), sym, def))
-Base.setindex!(mat::MTemplateMaterial, val, sym::Symbol) = setindex!(_properties(mat), val, sym)
-
-function update!(mat::MTemplateMaterialSingle, x::AbstractArray{<:Real})
+function instance(mat::MTemplateMaterialSingle, x::AbstractArray{<:Real})
     _massfracs = massfracs(mat)
     massfracfunc!(mat)(_massfracs, x)
-    mat.density[1] = densityfunc(mat)(_massfracs, x)
-    mat.atoms_per_g[1] = _atomicfracs_atoms_per_g!(atomicfracs(mat), atomicmasses(mat), _massfracs)
-    mat[:LastPos] = x
+    mat.density = densityfunc(mat)(_massfracs, x)
+    mat.atoms_per_cm³ = _atomicfracs_atoms_per_g!(atomicfracs(mat), atomicmasses(mat), _massfracs) * mat.density
+    mat.poscache .= x
+    return mat
 end
-function update!(mat::MTemplateMaterialThreaded, x::AbstractArray{<:Real})
-    update!(instance(mat), x)
+function instance(mat::MTemplateMaterialThreaded, x::AbstractArray{<:Real})
+    return instance(instance(mat), x)
+    #return mat
+end
+
+function update(mat::Union{MTemplateMaterialThreaded, MTemplateMaterialSingle}, x::AbstractArray{<:Real})
+    instance(mat, x)
+    return mat
 end
 
 """
@@ -416,7 +492,7 @@ end
         massfracs::AbstractVector{<:AbstractFloat},
         density::AbstractFloat;
         autoupdate::Bool=false,
-        lk::Union{Base.AbstractLock, Nothing}=nothing, 
+        lock::Union{Base.AbstractLock, Nothing}=nothing, 
         lastpos::Union{Nothing, AbstractArray}=nothing,
         properties::Union{Nothing, Dict{Symbol, <:Any}}=nothing,
     )
@@ -424,44 +500,43 @@ end
 A template material with the given template, mass fractions, atomic fractions, density and atoms/g.
 """
 function MTemplateMaterialSingle(
-    template::MaterialTemplate{N, V}, massfracs::AbstractArray{U}, density::AbstractFloat; autoupdate::Bool=false,
-    lk::Union{Base.AbstractLock, Nothing}=nothing, lastpos::Union{Nothing, AbstractArray}=nothing,
-    properties::Union{Nothing, Dict{Symbol, <:Any}}=nothing, kwargs...
-) where {N, U, V}
+    template::MaterialTemplate{N, T}, massfracs::AbstractArray{T}, density::AbstractFloat; autoupdate::Bool=false,
+    lock::Union{Base.AbstractLock, Nothing}=nothing, lastpos::Union{Nothing, AbstractArray}=nothing, kwargs...
+) where {N, T}
     if length(massfracs) != N
         error("massfracs has a wrong length")
     end
     if length(kwargs) != 0
         @warn "These keyword arguments do nothing: $(join(kwargs, ", "))"
     end
-    massfracs = MVector{N, U}(massfracs)
+    massfracs = SizedVector{N, T, Vector{T}}(massfracs)
     atomicfracs, atoms_per_g = _atomicfracs_atoms_per_g(atomicmasses(template), massfracs)
-    properties = something(properties, Dict{Symbol, Any}())
-    properties[:LastPos] = lastpos
-    MTemplateMaterialSingle{autoupdate}(template, massfracs, atomicfracs, density, atoms_per_g, properties, lk)
+    lastpos = SizedVector{3, T}(Vector{T}(something(lastpos, zeros(T, 3))))
+    MTemplateMaterialSingle{autoupdate}(template, massfracs, atomicfracs, T(density), T(atoms_per_g * density), lock, lastpos)
 end
 function MTemplateMaterialSingle(
-    mat::MTemplateMaterialSingle, massfracs::AbstractVector, density::AbstractFloat; lk::Union{Base.AbstractLock, Nothing}=nothing,
+    mat::MTemplateMaterialSingle, massfracs::AbstractVector, density::AbstractFloat; lock::Union{Base.AbstractLock, Nothing}=nothing,
     kwargs...
 )
-    if isnothing(lk)
+    if isnothing(lock)
         try
-            lk = typeof(mat.lk)()
+            lock = typeof(mat.lock)()
+            @warn "`mat.lock` could have been copied eroneously"
         catch
             @warn "tried to copy `mat.lk` but failed, leaving it as `nothing`"
             nothing
         end
     end
-    MTemplateMaterialSingle(template(mat), massfracs, density; lk=lk, kwargs...)
+    MTemplateMaterialSingle(template(mat), massfracs, density; lock=lock, kwargs...)
 end
 
 """
     MTemplateMaterialThreaded(default::MTemplateMaterialUnLocked; id_type::Type=Nothing, identifier::Any=nothing)
 
-A material with buffer for each thread/task to prevent dataraces.
+A mutable template material with buffer for each thread/task to prevent dataraces.
 """
 function MTemplateMaterialThreaded(default::MTemplateMaterialUnLocked; id_type::Type=Nothing, identifier::Any=nothing)
-    identifier = something(identifier, cpu_current_task_id)
+    identifier = something(identifier, ()->objectid(current_task()))
     if id_type == Nothing
         try
             id_type = typeof(identifier())
@@ -478,35 +553,25 @@ end
         template::MaterialTemplate,
         massfracs::AbstractVector{<:AbstractFloat},
         density::AbstractFloat;
-        autoupdate::Bool=false,
-        lk::Union{Base.AbstractLock, Nothing}=nothing, 
+        lock::Union{Base.AbstractLock, Nothing}=nothing, 
         lastpos::Union{Nothing, AbstractArray}=nothing,
-        properties::Union{Nothing, Dict{Symbol, <:Any}}=nothing,
         threaded::Bool=true,
         id_type::Type=Nothing,
         identifier::Any=nothing
         autoupdate::Bool=true,
     )
 
-A template material with the given template, mass fractions, atomic fractions, density and atoms/g.
-
-**Properties**
-
-- `:Density` # Density in g/cm³
-- `:Description` # Human friendly
-- `:Pedigree` #  Quality indicator for compositional data ("SRM-XXX", "CRM-XXX", "NIST K-Glass", "Stoichiometry", "Wet-chemistry by ???", "WDS by ???", "???")
-- `:Conductivity` = :Insulator | :Semiconductor | :Conductor
-- `:OtherUserProperties` # Other properties can be defined as needed
+A mutable template material with the given template, mass fractions, atomic fractions, density and atoms/g.
 """
 function MTemplateMaterial(
-    template::MaterialTemplate, massfracs::AbstractArray, density::AbstractFloat; lk::Union{Base.AbstractLock, Nothing}=nothing, 
+    template::MaterialTemplate, massfracs::AbstractArray, density::AbstractFloat; lock::Union{Base.AbstractLock, Nothing}=nothing, 
     threaded::Bool=false, id_type::Type=Nothing, identifier::Any=nothing, kwargs...
 )
-    if threaded && !(isnothing(lk))
+    if threaded && !(isnothing(lock))
         @warn "lock `lk` must be nothing for threaded material, setting it to `nothing`"
-        lk = nothing
+        lock = nothing
     end
-    res = MTemplateMaterialSingle(template, massfracs, density; lk=lk, kwargs...)
+    res = MTemplateMaterialSingle(template, massfracs, density; lock=lock, kwargs...)
     if threaded
         return MTemplateMaterialThreaded(res; id_type=id_type, identifier=identifier)
     end
@@ -517,14 +582,17 @@ end
     MTemplateMaterial(
         name::AbstractString,
         elms::AbstractVector{Element},
-        massfracfunc!::Any,
+        massfracfunc!::Any;
+        static::Bool=false,
         atomicmasses::Union{AbstractArray, Nothing}=nothing,
+        properties::Union{Nothing, Dict{Symbol, <:Any}}=nothing,
         densityfunc::Any=nothing,
         massfractype::Type{<:AbstractFloat}=Float64,
         threaded::Bool=true,
         id_type::Type=Nothing,
         identifier::Any=nothing
         autoupdate::Bool=true,
+        pos::Union{AbstractVector{<:AbstractFloat}, Nothing}=nothing
     )
 
 A material whose composition and density can be functions of the position in space. Ideally the material must be defined for all points 
@@ -539,7 +607,41 @@ new position. The last position where material properties were updated is also c
 - `:Conductivity` = :Insulator | :Semiconductor | :Conductor
 - `:OtherUserProperties` # Other properties can be defined as needed
 """
-function MTemplateMaterial(
+function TemplateMaterial(
+    template::MaterialTemplate{N, T};
+    static::Bool=true,
+    pos::Union{AbstractVector{<:AbstractFloat}, Nothing}=nothing,
+    kwargs...
+) where {N, T}
+    if static
+        if get(kwargs, :autoupdate, false)
+            return SParametricMaterial(template)
+        elseif !isnothing(pos)
+            return STemplateMaterial(template, pos)
+        else
+            error("Cannot create static template material without `autoupdate=true` or a `pos` being specified")
+        end
+    end
+    massfracs = SizedVector{N, T}(zeros(T, N))
+    x = something(pos, zeros(3))
+    try
+        massfracs = massfracfunc!(template)(massfracs, x)
+    catch ex
+        error("masfracfunc! is not a suitable function, Please check the source error: $(ex.msg)")
+    end
+    density = nothing
+    try
+        density = densityfunc(template)(massfracs, x)
+    catch ex
+        error("densityfunc is not a suitable function, Please check the source error: $(ex.msg)")
+    end
+    if ~(density isa Real)
+        error("densityfunc must return a scalar")
+    end
+    return MTemplateMaterial(template, massfracs, density; lastpos=x, kwargs...)
+end
+
+function TemplateMaterial(
     name::AbstractString,
     elms::AbstractVector{Element},
     massfracfunc!::Any;
@@ -549,33 +651,11 @@ function MTemplateMaterial(
     massfractype::Type{<:AbstractFloat}=Float64,
     kwargs...
 )
-    if isnothing(densityfunc)
+    if !isnothing(massfracfunc!) && isnothing(densityfunc)
         densityfunc = volume_conserving_density(elms)
     end
-    template = MaterialTemplate(name, elms, massfracfunc!, densityfunc, atomicmasses, properties)
-    massfracs = zero(MVector{length(template), massfractype})
-    x = get(kwargs, :lastpos, zeros(3))
-    try
-        massfracfunc!(massfracs, x)
-    catch ex
-        error("masfracfunc! is not a suitable function, Please check the source error: $(ex.msg)")
-    end
-    if isnothing(densityfunc)
-        densityfunc = volume_conserving_density(elms)
-    end
-    density = nothing
-    try
-        density = densityfunc(massfracs, x)
-    catch ex
-        error("densityfunc is not a suitable function, Please check the source error: $(ex.msg)")
-    end
-    if ~(density isa Real)
-        error("densityfunc must return a scalar")
-    end
-    if haskey(kwargs, :lastpos)
-        return MTemplateMaterial(template, massfracs, density; kwargs...)
-    end
-    return MTemplateMaterial(template, massfracs, density; lastpos=x, kwargs...)
+    template = MaterialTemplate(massfractype, name, elms, massfracfunc!, densityfunc, atomicmasses, properties)
+    return TemplateMaterial(template; kwargs...)
 end
 
 """
@@ -583,12 +663,14 @@ end
         name::AbstractString,
         elms::AbstractVector{Element},
         massfracfunc!::Any;
+        static::Bool=false,
         atomicmasses::Union{AbstractArray, Nothing}=nothing,
         densityfunc::Any=nothing,
         massfractype::Type{<:AbstractFloat}=Float64,
         threaded::Bool=true,
         id_type::Type=Nothing,
         identifier::Any=nothing
+        pos::Union{AbstractVector{<:AbstractFloat}, Nothing}=nothing
     )
 
 A material whose composition and density can be functions of the position in space. Ideally the material must be defined for all points 
@@ -604,33 +686,37 @@ new position. The last position where material properties were updated is also c
 - `:OtherUserProperties` # Other properties can be defined as needed
 """
 function ParametricMaterial(
-    name::AbstractString,
-    elms::AbstractVector{Element},
-    massfracfunc!::Any;
+    args...;
     kwargs...
 )
     if haskey(kwargs, :autoupdate)
         error("keyword argument `autoupdate` not allowed for `ParametricMaterial`")
     end
-    MTemplateMaterial(name, elms, massfracfunc!; autoupdate=true, kwargs...)
-end
-
-function Base.copy(mat::ParametricMaterial{<:Any, U}) where U
-    return ParametricMaterial{U}(mat.name, mat.elms, mat.massfracfunc!, mat.a, mat.densityfunc, mat.properties)
+    TemplateMaterial(args...; autoupdate=true, kwargs...)
 end
 
 function massfractions!(mat::ParametricMaterial, massfracs::AbstractVector{<:Real}, x::AbstractVector{<:Real})
-    return mat.massfracfunc!(massfracs, x, mat.elms)
+    return massfracfunc!(mat)(massfracs, x)
 end
 
 function massfractions(mat::ParametricMaterial, x::AbstractVector{<:Real})
     massfracs = similar(mat.massfracs)
-    return mat.massfracfunc!(massfracs, x, mat.elms)
+    return massfracfunc!(mat)(massfracs, x)
 end
 
 function density(mat::ParametricMaterial, x::AbstractVector{<:Real})
-    return mat.densityfunc(x, mat.elms)
+    return densityfunc(mat)(massfracs(mat), x)
 end
+
+function STemplateMaterial(::Type{T}, mat::Material) where T
+    ρ = density(mat)
+    elms_ = collect(elms(mat))
+    a_ = [T(a(elm, mat)) for elm in elms_]
+    template = MaterialTemplate(T, mat.name, elms_, nothing, nothing, a_, mat.properties)
+    massfracs = [T(mat[elm]) for elm in elms_]
+    return STemplateMaterial(template, massfracs, ρ)
+end
+STemplateMaterial(mat::Material) = STemplateMaterial(Float64, mat)
 
 """
 ParametricMaterial(

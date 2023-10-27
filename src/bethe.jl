@@ -1,73 +1,3 @@
-using QuadGK
-using GeometryBasics: Point, Rect3, Sphere, GeometryPrimitive, origin, widths, radius
-
-"""
-`Position` : A point in 3-D.  Ultimately, derived from StaticArray. Glen - redefinition here as scattering is first included.
-"""
-const Position = Point{3,Float64} # Glen - moved here from mc.jl
-
-#="""
-Particle represents a type that may be simulated using a transport Monte Carlo.  It must provide
-these methods:
-
-    position(el::Particle)::Position
-    previous(el::Particle)::Position
-    energy(el::Particle)::Float64
-
-The position of the current and previous elastic scatter locations which are stored in that Particle type.
-
-    T(prev::Position, curr::Position, energy::Energy) where {T <: Particle }
-    T(el::T, 𝜆::Float64, 𝜃::Float64, 𝜑::Float64, ΔE::Float64) where {T <: Particle }
-
-Two constructors: One to create a defined Particle and the other to create a new Particle based off
-another which is translated by `λ` at a scattering angle (`θ`, `ϕ`) which energy change of `ΔE`
-
-    transport(pc::T, mat::Material)::NTuple{4, Float64} where {T <: Particle }
-
-A function that generates the values of ( `λ`, `θ`, `ϕ`, `ΔE`) for the specified `Particle` in the specified `Material`.
-"""
-abstract type Particle end # Glen - moved here from mc.jl
-
-struct Electron <: Particle
-    previous::Position
-    current::Position
-    energy::Float64 # eV
-
-    """
-        Electron(prev::Position, curr::Position, energy::Float64)
-        Electron(el::Electron, 𝜆::Float64, 𝜃::Float64, 𝜑::Float64, ΔE::Float64)::Electron
-    
-    Create a new `Electron` from this one in which the new `Electron` is a distance `𝜆` from the
-    first along a trajectory that is `𝜃` and `𝜑` off the current trajectory.
-    """
-    Electron(prev::AbstractArray{Float64}, curr::AbstractArray{Float64}, energy::Float64) =
-        new(prev, curr, energy)
-
-    function Electron(el::Electron, 𝜆::Float64, 𝜃::Float64, 𝜑::Float64, ΔE::Float64)
-        (u, v, w) = LinearAlgebra.normalize(position(el) .- previous(el))
-        sc =
-            1.0 - abs(w) > 1.0e-8 ? #
-            Position( #
-                u * cos(𝜃) + sin(𝜃) * (u * w * cos(𝜑) - v * sin(𝜑)) / sqrt(1.0 - w^2), #
-                v * cos(𝜃) + sin(𝜃) * (v * w * cos(𝜑) + u * sin(𝜑)) / sqrt(1.0 - w^2), #
-                w * cos(𝜃) - sqrt(1.0 - w^2) * sin(𝜃) * cos(𝜑), # 
-            ) :
-            Position( #
-                sign(w) * sin(𝜃) * cos(𝜑), #
-                sign(w) * sin(𝜃) * sin(𝜑), #
-                sign(w) * cos(𝜃),
-            )
-        return new(position(el), position(el) .+ 𝜆 * sc, el.energy + ΔE)
-    end
-end
-
-Base.show(io::IO, el::Electron) = print(io, "Electron[$(position(el)), $(energy(el)) eV]")
-Base.position(el::Particle) = el.current
-previous(el::Particle) = el.previous
-energy(el::Particle) = el.energy
-=#
-
-# Energy loss expressions
 """
 An abstract type to describe kinetic energy loss by electrons. 
 """
@@ -85,77 +15,91 @@ SCANNING Vol. 11, 176-180 (1989)
 struct JoyLuo <: BetheEnergyLoss end
 
 """
-    dEds(::Type{<:BetheEnergyLoss}, e::Float64, elm::Element, ρ::Float64; mip::Type{<:NeXLMeanIonizationPotential}=Berger1982)
-    dEds(::Type{<:BetheEnergyLoss}, e::Float64, mat::AbstractMaterial, inclDensity=true; mip::Type{<:NeXLMeanIonizationPotential}=Berger1982)
+    dEdρs(::Type{<:BetheEnergyLoss}, e::AbstractFloat, elm::Element, ::Type{<:NeXLMeanIonizationPotential}=Berger1982)
+    dEdρs(::Type{<:BetheEnergyLoss}, e::AbstractFloat, mat::AbstractMaterial, ::Type{<:NeXLMeanIonizationPotential}=Berger1982)
+
+Calculate the loss per unit mass path length for an electron in the specified element. The results in energy
+loss in eV/gcm<sup>2</sup>.  Implemented by `Type{Bethe}` and `Type{JoyLuo}`.
+"""
+function dEdρs(
+    ::Type{Bethe},
+    e::T,
+    elm::Element,
+    ::Type{MIP} = Berger1982,
+) where {T<:AbstractFloat, MIP<:NeXLMeanIonizationPotential}
+    j = T(J(MIP, elm))
+    (T(-785.0e8) * z(T, elm)) / (a(T, elm) * e) * log(T(1.166) * e / j)
+end
+function dEdρs(
+    ::Type{JoyLuo},
+    e::T,
+    elm::Element,
+    ::Type{MIP} = Berger1982,
+) where {T<:AbstractFloat, MIP<:NeXLMeanIonizationPotential}
+    # Zero allocation
+    k = T(0.731) + T(0.0688) * log10(z(T, elm))
+    j = T(J(MIP, z(elm)))
+    jp = j / (one(T) + k * j / e)
+    return ((T(-785.0e8) * z(T, elm)) / (a(T, elm) * e)) * log(T(1.166) * e / jp)
+end
+function dEdρs(
+    ::Type{BEL},
+    e::Real,
+    mat::AbstractMaterial{T},
+    ::Type{MIP} = Berger1982,
+) where {T<:AbstractFloat, BEL<:BetheEnergyLoss, MIP<:NeXLMeanIonizationPotential}
+    res = zero(T)
+    for el in elms(mat)
+        res += dEdρs(BEL, e, el, MIP) * mat[el]
+    end
+    return res
+end
+function dEdρs(
+    ::Type{BEL},
+    e::Real,
+    mat::VectorizedMaterial{<:Any, T},
+    ::Type{MIP} = Berger1982,
+) where {T<:AbstractFloat, BEL<:BetheEnergyLoss, MIP<:NeXLMeanIonizationPotential}
+    sum(dEdρs.(BEL, Ref(e), elms_vector(mat), MIP) .* massfracs(mat))
+end
+# Guarantees no allocation
+function dEdρs_(
+    ::Type{BEL},
+    e::Real,
+    mat::VectorizedMaterial{<:Any, T},
+    ::Type{MIP} = Berger1982,
+) where {T<:AbstractFloat, BEL<:BetheEnergyLoss, MIP<:NeXLMeanIonizationPotential}
+    res = zero(T)
+    for index in eachindex(mat)
+        res += dEdρs(BEL, e, elm(mat, index), MIP) * massfrac(mat, index)
+    end
+    return res
+end
+
+"""
+    dEds(::Type{<:BetheEnergyLoss}, e::AbstractFloat, elm::Element, ρ::Real, ::Type{<:NeXLMeanIonizationPotential}=Berger1982)
+    dEds(::Type{<:BetheEnergyLoss}, e::AbstractFloat, mat::AbstractMaterial, ::Type{<:NeXLMeanIonizationPotential}=Berger1982)
+    dEds(::Type{<:BetheEnergyLoss}, e::AbstractFloat, mat::ParametricMaterial, pos::AbstractVector, ::Type{<:NeXLMeanIonizationPotential}=Berger1982)
 
 Calculate the loss per unit path length for an electron in the specified element and density.  The results in energy
-loss in eV/Å.  Implemented by `Type{Bethe}` and `Type{JoyLuo}`.
+loss in eV/cm.  Implemented by `Type{Bethe}` and `Type{JoyLuo}`.
 """
-dEds(
-    ::Type{Bethe},
-    e::Real,
-    elm::Element,
-    ρ::Real,
-    mip::Type{<:NeXLMeanIonizationPotential} = Berger1982,
-) = (-785.0e8 * ρ * z(elm)) / (a(elm) * e) * log(1.166e / J(mip, elm))
-
 function dEds(
-    ::Type{JoyLuo},
-    e::Real,
+    ::Type{BEL},
+    e::AbstractFloat,
     elm::Element,
     ρ::Real,
-    mip::Type{<:NeXLMeanIonizationPotential} = Berger1982,
-)
-    # Zero allocation
-    k = 0.731 + 0.0688 * log(10.0, z(elm))
-    j = J(mip, z(elm))
-    jp = j / (1.0 + k * j / e)
-    return ((-785.0e8 * ρ * z(elm)) / (a(elm) * e)) * log(1.166 * e / jp)
+    ::Type{MIP} = Berger1982,
+) where {BEL<:BetheEnergyLoss, MIP<:NeXLMeanIonizationPotential}
+    return dEdρs(BEL, e, elm, MIP) * ρ
 end
 function dEds(
     ::Type{BEL},
-    e::Real,
+    e::AbstractFloat,
     mat::AbstractMaterial,
     ::Type{MIP} = Berger1982,
 ) where {BEL<:BetheEnergyLoss, MIP<:NeXLMeanIonizationPotential}
-    ρ = density(mat)
-    return sum(elms(mat)) do el
-        dEds(BEL, e, el, ρ, MIP) * mat[el]
-    end
-end
-function dEds(
-    ::Type{BEL},
-    e::Real,
-    mat::VectorizedMaterial,
-    ::Type{MIP} = Berger1982,
-) where {BEL<:BetheEnergyLoss, MIP<:NeXLMeanIonizationPotential}
-    ρ = density(mat)
-    return sum(eachindex(mat)) do i
-        dEds(BEL, e, elm_nocheck(mat, i), ρ, MIP) * massfrac(mat, i)
-    end
-end
-
-function dEds!(
-    ::Type{BEL},
-    e::Real,
-    mat::MTemplateMaterial,
-    pos::AbstractVector,
-    ::Type{MIP} = Berger1982,
-) where {BEL<:BetheEnergyLoss, MIP<:NeXLMeanIonizationPotential}
-    update!(mat, pos)
-    dEds(BEL, e, mat, MIP)
-end
-function dEds!(
-    ::Type{BEL},
-    e::Real,
-    mat::MTemplateMaterialLocked,
-    pos::AbstractVector,
-    ::Type{MIP} = Berger1982,
-) where {BEL<:BetheEnergyLoss, MIP<:NeXLMeanIonizationPotential}
-    return locked(mat) do 
-        update!(mat, pos)
-        dEds(BEL, e, mat, MIP)
-    end
+    return dEdρs(BEL, e, mat, MIP) * density(mat)
 end
 
 """

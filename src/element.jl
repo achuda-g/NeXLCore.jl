@@ -14,7 +14,7 @@ configuration(elm::Element) = elm.el_config
 """
     element(z::Int)::PeriodicTable.Element
 
-Covert an atomic number into a PeriodicTable.Element
+Covnert an atomic number into a PeriodicTable.Element
 """
 element(z::Integer) = PeriodicTable.elements[z]
 
@@ -23,7 +23,8 @@ element(z::Integer) = PeriodicTable.elements[z]
 
 Return the mean atomic weight of the Element in amu
 """
-a(elm::Element) = ustrip(elm.atomic_mass |> u"u")
+a(::Type{T}, elm::Element) where T = ustrip(T, u"u", elm.atomic_mass)
+a(elm::Element) = a(Float64, elm)
 
 """
     z(elm::Element)
@@ -31,6 +32,7 @@ a(elm::Element) = ustrip(elm.atomic_mass |> u"u")
 Return the atomic number of the Element.
 """
 z(elm::Element) = elm.number
+z(::Type{T}, elm::Element) where T = T(elm.number)
 
 """
     symbol(elm::Element)
@@ -51,7 +53,8 @@ name(elm::Element) = elm.name
 
 Return the nominal density for the element in g/cm³.
 """
-density(elm::Element) = ustrip(elm.density |> u"g/cm^3")
+density(::Type{T}, elm::Element) where T = ustrip(T, u"g/cm^3", elm.density)
+density(elm::Element) = density(Float64, elm)
 
 #Base.:(==)(elm1::Element, elm2::Element) = z(elm1) == z(elm2) # is included in PeriodicTable.jl
 

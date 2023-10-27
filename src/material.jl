@@ -6,7 +6,8 @@ using LaTeXStrings
 import Base.rand
 import Statistics
 
-const _AVAGADRO = ustrip(NoUnits, AvogadroConstant / u"1/mol")
+_AVAGADRO(::Type{T}) where {T<:AbstractFloat} = ustrip(T, NoUnits, AvogadroConstant / u"1/mol")
+_AVAGADRO() = ustrip(NoUnits, AvogadroConstant / u"1/mol")
 
 """
 Abstract type for defining Materials which Hold basic data about a material including name, composition in mass fraction and optional propreties.
@@ -116,7 +117,7 @@ atomicmass(mat::AbstractMaterial, elm::Element) = a(elm, mat)
 
 Number of atoms in 1 gram of pure element `elm`
 """
-atoms_per_g(elm::Element) = _AVAGADRO / a(elm)
+atoms_per_g(elm::Element) = _AVAGADRO() / a(elm)
 
 """
     atoms_per_g(mat::AbstractMaterial, elm::Element)
@@ -225,6 +226,7 @@ Base.copy(m::Material) =
 The elements with mass fraction ≠ 0.0 in `mat`.
 """
 elms(mat::Material) = keys(mat.massfraction)
+elms_vector(mat::Material) = SVector{length(mat), Element}(elm for elm in elms(mat))
 
 """
     ispure(mat::Material)
@@ -247,6 +249,7 @@ Base.isequal(m1::Material, m2::Material) =
 Base.hash(m::Material, h::UInt) =
     hash(m.name, hash(m.properties, hash(m.a, hash(m.massfraction, h))))
 
+Base.length(mat::Material) = length(mat.massfraction)
 
 Base.:+(mat1::Material, mat2::Material)::Material = sum(mat1, mat2)
 
@@ -336,8 +339,12 @@ function Base.sum(
     return Material(ismissing(name) ? res.name : name, res.massfraction, res.a, props)
 end
 
-atoms_per_g(mat::Material, elm::Element) = mat[elm] * _AVAGADRO / a(elm, mat)
-atoms_per_g(mat::Material) = sum(elm -> atoms_per_g(mat, elm), keys(mat))
+function atoms_per_g(mat::Material{U}, elm::Element)::U where U
+    mat[elm] * _AVAGADRO(U) / a(elm, mat)
+end
+function atoms_per_g(mat::Material)
+    sum(elm -> atoms_per_g(mat, elm), keys(mat))
+end
 
 """
     material(
@@ -448,7 +455,9 @@ function Base.convert(::Type{Material{Float64,Float64}}, comp::Material)::Materi
 end
 Base.convert(::Type{Material{Float64,Float64}}, ::Nothing) = nothing
 
-a(elm::Element, mat::Material) = get(mat.a, elm, a(elm))
+function a(elm::Element, mat::Material{V})::V where V
+    get(mat.a, elm, V.(a(elm)))
+end
 
 Base.getindex(mat::Material{U,V}, elm::Element) where {U<:AbstractFloat,V<:AbstractFloat} =
     get(mat.massfraction, elm, zero(U))
@@ -564,7 +573,7 @@ end
 
 The mass fraction as a Dict{Element, AbstractFloat}
 """
-massfraction(mat::Material)::Dict{Element,AbstractFloat} = copy(mat.massfraction)
+massfraction(mat::Material) = copy(mat.massfraction)
 
 """
     Base.keys(mat::Material)
@@ -790,18 +799,20 @@ compare(unks::AbstractVector{<:Material}, known::Material) =
 
 
 """
-    mac(mat::Material, xray::Union{Float64,CharXRay}, alg::Type{<:NeXLAlgorithm}=DefaultAlgorithm)::Float64
+    mac(mat::Material, xray::Union{Real,CharXRay}, alg::Type{<:NeXLAlgorithm}=DefaultAlgorithm)
 
 Compute the material MAC using the standard mass fraction weighted formula.
 """
-mac(mat::Material, energy::Float64, alg::Type{<:NeXLAlgorithm}=DefaultAlgorithm) =
+function mac(mat::Material{U}, energy::U, alg::Type{<:NeXLAlgorithm}=DefaultAlgorithm)::U where U
     sum(mat.massfraction) do (elm, mf)
-        mac(elm, energy, alg) * max(0.0, value(mf))
+        mac(elm, energy, alg) * max(zero(U), value(mf))
     end
-mac(mat::Material, xray::CharXRay, alg::Type{<:NeXLAlgorithm}=DefaultAlgorithm) =
+end
+function mac(mat::Material{U}, xray::CharXRay, alg::Type{<:NeXLAlgorithm}=DefaultAlgorithm)::U where U
     sum(mat.massfraction) do (elm, mf)
-        mac(elm, xray, alg) * max(0.0, value(mf))
+        mac(elm, xray, alg) * max(zero(U), value(mf))
     end
+end
 
 listcustommacs(mat::Material) = listcustommacs(keys(mat))
 

@@ -172,7 +172,10 @@ function cumulative!(v::AbstractVector{T}) where T
     return v
 end
 
-direction(v1::AbstractArray{<:Number}, v2::AbstractArray{<:Number}) = LinearAlgebra.normalize(v1 .- v2)
+function cumulative(v::AbstractVector{T}) where T
+    res = similar(v)
+    return cumulative!(res)
+end
 
 function elsepa_angles()
     res = Vector{Float64}()

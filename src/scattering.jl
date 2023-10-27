@@ -1,5 +1,4 @@
 using Dierckx
-using QuadGK
 
 """
     a₀ : Bohr radius (in cm)
@@ -154,18 +153,37 @@ end
 
 Total cross section per atom in cm².
 """
-function σₜ(::Type{ScreenedRutherford}, elm::Element, E::Real)
+function σₜ(::Type{ScreenedRutherford}, elm::Element, E::T)::T where T
     ϵv = ϵ(ScreenedRutherford, elm, E)
     return ξ(ScreenedRutherford, elm, E) * (2.0 * ϵv^2 / (2.0 * ϵv + 1.0))
 end
-function σₜ(::Type{Liljequist1989}, elm::Element, E::Real)
+function σₜ(::Type{Liljequist1989}, elm::Element, E::T)::T where T
     return σₜ(ScreenedRutherford, elm, E) / LiljequistCorrection[z(elm)](E)
 end
-function σₜ(::Type{S}, mat::AbstractMaterial, E::Real) where S<:ElasticScatteringCrossSection
+function σₜ(::Type{S}, mat::AbstractMaterial{T}, E::T)::T where {S<:ElasticScatteringCrossSection, T}
+    res::T = zero(T)
+    for elm in elms(mat)
+        res += σₜ(S, mat, elm, E)
+    end
+    return res
     return sum(elm -> σₜ(S, mat, elm, E), elms(mat))
 end
-function σₜ(::Type{S}, mat::VectorizedMaterial, E::Real) where S<:ElasticScatteringCrossSection
+function _σₜ(::Type{S}, mat::AbstractMaterial{T}, E::T)::T where {S<:ElasticScatteringCrossSection, T}
+    return sum(elm -> σₜ(S, mat, elm, E), elms(mat))
+end
+function _σₜ(::Type{S}, mat::VectorizedMaterial{<:Any, T}, E::T)::T where {S<:ElasticScatteringCrossSection, T}
+    res::T = zero(T)
+    for (elm, afrac) in zip(elms_vector(mat), atomicfracs(mat))
+        res += σₜ(S, elm, E) * afrac
+    end
+    return res
+    return sum(x -> σₜ(S, x[1], E) * x[2], zip(elms_vector(mat), atomicfracs(mat)))
+end
+function σₜ(::Type{S}, mat::VectorizedMaterial{<:Any, T}, E::T)::T where {S<:ElasticScatteringCrossSection, T}
     return sum(index -> σₜ(S, mat, index, E), eachindex(mat))
+end
+function __σₜ(::Type{S}, mat::VectorizedMaterial{<:Any, T}, E::T)::T where {S<:ElasticScatteringCrossSection, T}
+    return sum(x -> σₜ(S, x[1], E) * x[2], zip(elms_vector(mat), atomicfracs(mat)))
 end
 
 """
@@ -173,30 +191,42 @@ end
 
 Total cross section of `elm` per atom of `mat` in cm².
 """
-function σₜ(::Type{S}, mat::AbstractMaterial, elm::Element, E::Real) where S<:ElasticScatteringCrossSection
+function σₜ(::Type{S}, mat::AbstractMaterial{T}, elm::Element, E::T)::T where {S<:ElasticScatteringCrossSection, T}
     return σₜ(S, elm, E) * atomicfrac(mat, elm)
 end
 
 # Only use with eachindex(mat)
-function σₜ(::Type{S}, mat::VectorizedMaterial, index::Integer, E::Real) where S<:ElasticScatteringCrossSection
+function σₜ(::Type{S}, mat::VectorizedMaterial{<:Any, T}, index::Integer, E::T)::T where {S<:ElasticScatteringCrossSection, T}
     return σₜ(S, elm_nocheck(mat, index), E) * atomicfrac(mat, index)
 end
 
 """
-    σₜ_all(::Type{<:ElasticScatteringCrossSection}, mat::AbstractMaterial, E::Real, elms::AbstractVector{Element})::Vector
-    σₜ_all(::Type{<:ElasticScatteringCrossSection}, mat::VectorizedMaterial, E::Real)::Vector
+    _allσₜ!(::Type{<:ElasticScatteringCrossSection}, σ::AbstractVector, mat::AbstractMaterial, E::Real, elms::AbstractVector{Element})::Vector
+    _allσₜ!(::Type{<:ElasticScatteringCrossSection}, σ::AbstractVector, mat::VectorizedMaterial, E::Real)::Vector
 
 Total cross section of each element per atom of `mat` in cm² as a vector.
 """
-function σₜ_all(::Type{S}, mat::AbstractMaterial, E::Real, elms::AbstractVector{Element}) where S<:ElasticScatteringCrossSection
-    return collect(σₜ(S, mat, elm, E) for elm in elms)
+function _allσₜ!(::Type{S}, σ::AbstractVector{T}, mat::AbstractMaterial{T}, E::T, elms::AbstractVector{Element}) where {S<:ElasticScatteringCrossSection, T}
+    σ .= _atomicfrac.(Ref(mat), elms)
+    σ .*=  σₜ.(S, elms, E) ./ sum(σ)
     #return σₜ.(Ref(S), elms, Ref(E)) .* atomicfrac.(Ref(mat), elms)
 end
-function σₜ_all(::Type{S}, mat::VectorizedMaterial, E::Real) where S<:ElasticScatteringCrossSection
-    return collect(σₜ(S, mat, index, E) for index in eachindex(mat))
-    #return σₜ.(Ref(S), elms_vector(mat), Ref(E)) .* atomicfracs(mat)
+function _allσₜ!(::Type{S}, σ::AbstractVector{T}, mat::VectorizedMaterial{N, T}, E::T, elms::AbstractVector{Element}) where {S<:ElasticScatteringCrossSection, N, T}
+    σ .= σₜ.(S, elms, E) .* atomicfracs(mat)
 end
 
+function _allσₜ(::Type{S}, mat::AbstractMaterial{T}, E::T, elms::AbstractVector{Element}) where {S<:ElasticScatteringCrossSection, T}
+    σ = MVector{length(elms), T} |> zero
+    return _allσₜ!(S, σ, mat, E, elms)
+end
+
+function fracσₜ(::Type{S}, mat::AbstractMaterial{T}, E::T, elms::AbstractVector{Element}) where {S<:ElasticScatteringCrossSection, T}
+    return σₜ.(S, Ref(mat), elms, E)
+    #return SVector{length(mat), T}(σₜ(S, mat, elm, E) for elm in elms)
+end
+function fracσₜ(::Type{S}, mat::VectorizedMaterial{N, T}, E::T, elms::SVector{N, Element}) where {S<:ElasticScatteringCrossSection, N, T}
+    σₜ.(S, elms, E) .* atomicfracs(mat)
+end
 
 # Vectorised form of everything
 function σₜ(::Type{ScreenedRutherford},  elm::AbstractVector{Element}, E::AbstractVector{<:Real})
@@ -207,16 +237,14 @@ function σₜ(::Type{Liljequist1989},  elm::AbstractVector{Element}, E::Abstrac
     return σₜ(ScreenedRutherford, elm, E) ./ LiljequistCorrection[z(elm)](E)
 end
 
-
-
-function σₜ(::Type{Browning1991}, elm::Element, E::Real)
+function σₜ(::Type{Browning1991}, elm::Element, E::T)::T where T
     e = 0.001 * E
     u = log10(8.0 * e * z(elm)^-1.33)
     return 4.7e-18 * (z(elm)^1.33 + 0.032 * z(elm)^2) / (
         (e + 0.0155 * (z(elm)^1.33) * sqrt(e)) * (1.0 - 0.02 * sqrt(z(elm)) * exp(-u^2))
     )
 end
-function σₜ(::Type{Browning1994}, elm::Element, E::Real)
+function σₜ(::Type{Browning1994}, elm::Element, E::T) where T
     e = 0.001 * E
     return 3.0e-18 * z(elm)^1.7 /
            (e + 0.005 * z(elm)^1.7 * sqrt(e) + 0.0007 * z(elm)^2 / sqrt(e))
@@ -228,11 +256,11 @@ end
 
 The *differential* screened Rutherford cross-section per atom. 
 """
-function δσδΩ(::Type{ScreenedRutherford}, θ::Float64, elm::Element, E::Real)
+function δσδΩ(::Type{ScreenedRutherford}, θ::T, elm::Element, E::T)::T where T
     return ξ(ScreenedRutherford, elm, E) *
            (1.0 - cos(θ) + ϵ(ScreenedRutherford, elm, E)^-1)^-2
 end
-function δσδΩ(::Type{Liljequist1989}, θ::Float64, elm::Element, E::Real)
+function δσδΩ(::Type{Liljequist1989}, θ::T, elm::Element, E::T)::T where T
     return δσδΩ(ScreenedRutherford, θ, elm, E) / LiljequistCorrection[z(elm)](E)
 end
 
@@ -249,27 +277,29 @@ end
 
 The mean free path.  The mean distance between elastic scattering events. 
 """
-λ(σ::Real, N::Real) = (σ * N)^-1 
-λ(::Type{S}, elm::Element, E::Real, N::Real) where {S<:ElasticScatteringCrossSection} = λ(σₜ(S, elm, E), N)
-function λ(::Type{S}, mat::AbstractMaterial, elm::Element, E::Real) where {S<:ElasticScatteringCrossSection}
-    return λ(S, elm, E, atoms_per_cm³(mat, elm)) 
+λ(σ::T, N::T) where {T<:AbstractFloat} = (σ * N)^-1 
+λ(::Type{S}, elm::Element, E::T, N::T) where {S<:ElasticScatteringCrossSection, T} = λ(σₜ(S, elm, E), N)
+function λ(::Type{S}, mat::AbstractMaterial{T}, elm::Element, E::T)::T where {S<:ElasticScatteringCrossSection, T}
+    return λ(S, elm, E, atoms_per_cm³(mat, elm))
 end
-function λ(::Type{S}, mat::VectorizedMaterial, index::Integer, E::Real) where {S<:ElasticScatteringCrossSection}
+function λ(::Type{S}, mat::VectorizedMaterial{<:Any, T}, index::Integer, E::T) where {S<:ElasticScatteringCrossSection, T}
     return λ(S, elm_nocheck(mat, index), E, atoms_per_cm³(mat, index)) 
 end
-function λ(::Type{S}, mat::AbstractMaterial, E::Real) where {S<:ElasticScatteringCrossSection}
-    return λ(σₜ(S, mat, E), atoms_per_cm³(mat)) 
+function λ(::Type{S}, mat::AbstractMaterial{T}, E::T)::T where {S<:ElasticScatteringCrossSection, T}
+    return λ(σₜ(S, mat, E), atoms_per_cm³(mat))
 end
 
-function λ!(::Type{S}, mat::MTemplateMaterial, E::Real, pos::AbstractVector) where {S<:ElasticScatteringCrossSection}
-    update!(mat, pos)
-    return λ(S, mat, E) 
+# Useful when σ can be precomputed
+function λ(mat::VectorizedMaterial{N, T}, σ::StaticVector{N, T}) where {N, T}
+    return λ(sum(index -> σ[index] * atomicfrac(mat, index), eachindex(σ)), atoms_per_cm³(mat))
 end
-function λ!(::Type{S}, mat::MTemplateMaterialLocked, E::Real, pos::AbstractVector) where {S<:ElasticScatteringCrossSection}
-    return locked(mat) do mat
-        update!(mat, pos)
-        λ(S, mat, E)
-    end
+function λ(mat::ParametricMaterial{N, T}, σ::StaticVector{N, T}, pos::AbstractVector) where {N, T}
+    return evaluateat(_mat ->  λ(_mat, σ), mat, pos)
+end
+
+# For parametric material, could lead to memory allocation
+function λ(::Type{S}, mat::ParametricMaterial{<:Any, T}, E::T, pos::AbstractVector{T}) where {S<:ElasticScatteringCrossSection, T}
+    return λ(mat, σₜ.(S, elms_vector(mat), E), pos)
 end
 
 """
@@ -284,9 +314,10 @@ path.  This implementation depends on two facts: 1) We are looking for the first
 so we consider all the elements and pick the one with the shortest path. 2) The process is memoryless.
 """
 function Base.rand(
-    ::Type{S}, mat::AbstractMaterial, E::Real, floattype::Type{T}=Float64
-) where {S<:ElasticScatteringCrossSection, T<:AbstractFloat}
-    elm′, λ′ = elements[119], 1.0e308
+    ::Type{S}, mat::AbstractMaterial{T}, E::T
+)::NTuple{3, T} where {S<:ElasticScatteringCrossSection, T<:AbstractFloat}
+    elm′::Element = elements[119]
+    λ′::T = 1.0e308
     for elm in elms(mat)
         l = -λ(S, mat, elm, E) * log(rand(T))
         if (l < λ′)
@@ -294,12 +325,13 @@ function Base.rand(
         end
     end
     @assert elm′ != elements[119] "Are there any elements in $mat?  Is the density ($(mat[:Density])) too low?"
-    return (λ′, rand(S, elm′, E), T(2.0 * π) * rand(T))
+    return (λ′, rand(S, elm′, E), T(2π) * rand(T))
 end
 function Base.rand(
-    ::Type{S}, mat::VectorizedMaterial, E::Real, floattype::Type{T}=Float64
-) where {S<:ElasticScatteringCrossSection, T<:AbstractFloat}
-    elm′, λ′ = elements[119], 1.0e308
+    ::Type{S}, mat::VectorizedMaterial{<:Any, T}, E::T
+)::NTuple{3, T} where {S<:ElasticScatteringCrossSection, T<:AbstractFloat}
+    elm′::Element = elements[119]
+    λ′::T = 1.0e308
     for index in eachindex(mat)
         l = -λ(S, mat, index, E) * log(rand(T))
         if (l < λ′)
@@ -307,114 +339,92 @@ function Base.rand(
         end
     end
     @assert elm′ != elements[119] "Are there any elements in $mat?  Is the density ($(mat[:Density])) too low?"
-    return (λ′, rand(S, elm′, E), T(2.0 * π) * rand(T))
+    return (λ′, rand(S, elm′, E), T(2π) * rand(T))
 end
 
-"""
-    randλ(::Type{<:ElasticScatteringCrossSection}, mat::AbstractMaterial, E::Real, floattype::Type{<:AbstractFloat}=Float64)
-    randλ(
-        ::Type{<:ElasticScatteringCrossSection},
-        mat::ParametricMaterial,
-        E::Real,
-        pos::AbstractVector{<:Real},
-        dir::AbstractVector{<:Real},
-        rtol::Real=0.01,
-        num_iterations::Integer=5,
-        nquad::Integer=5,
-        floattype::Type{<:AbstractFloat}=Float64
-    )
-
-Randomly selected path length in the material between two elastic scattering events
-"""
-function randλ(
-    ::Type{S}, mat::AbstractMaterial, E::Real, floattype::Type{T}=Float64
-) where {S<:ElasticScatteringCrossSection, T<:AbstractFloat}
-    return -λ(S, mat, E) * log(rand(T))
-end
-function randλ(
-    ::Type{S},
-    mat::ParametricMaterial,
-    E::Real,
-    pos::AbstractVector{<:Real},
-    dir::AbstractVector{<:Real},
-    rtol::Real=0.01,
-    num_iterations::Integer=5,
-    nquad::Integer=5,
-    floattype::Type{T}=Float64
-) where {S<:ElasticScatteringCrossSection, T<:AbstractFloat}
-    newpos = similar(pos)
-    quad = quadrature(nquad)
-    λ′ = λ(S, mat, E)
-    r = -log(rand(T))
-    rl = r * λ′
-    for _ in 1:num_iterations
-        λ′old = λ′
-        λ′ = quad(zero(λ′), rl) do l
-            newpos .= pos .+ l .* dir
-            λ!(S, mat, E, newpos)
+function randλelm(
+    ::Type{S}, mat::AbstractMaterial{T}, E::T
+)::Tuple{T, Element} where {S<:ElasticScatteringCrossSection, T<:AbstractFloat}
+    elm′::Element = elements[119]
+    𝜆::T = typemax(T)
+    for elm in elms(mat)
+        l = -λ(S, mat, elm, E) * log(rand(T))
+        if (l < 𝜆)
+            (elm′, 𝜆) = (elm, l)
         end
-        λ′ /= rl
-        rl = r * λ′
-        if abs(λ′ - λ′old) / λ′ < rtol
+    end
+    if 𝜆 ≈ typemax(T) error("Failed to pick element for $mat") end
+    return 𝜆, elm′
+end
+function randλelm(
+    ::Type{S}, mat::VectorizedMaterial{<:Any, T}, E::T
+)::Tuple{T, Element} where {S<:ElasticScatteringCrossSection, T<:AbstractFloat}
+    elms = elms_vector(mat)
+    σ = fracσₜ(S, mat, E, elms)
+    𝜆 = λ(sum(σ), atoms_per_cm³(mat)) * -log(rand(T))
+    return 𝜆, pickrand(elms, σ)
+end
+# alternate method, guarantees no memory allocation
+function randλelm_(
+    ::Type{S}, mat::VectorizedMaterial{<:Any, T}, E::T
+)::Tuple{T, Element} where {S<:ElasticScatteringCrossSection, T<:AbstractFloat}
+    elm′::Element = elements[119]
+    𝜆::T = typemax(T)
+    for index in eachindex(mat)
+        l = -λ(S, mat, index, E) * log(rand(T))
+        if (l < 𝜆)
+            (elm′, 𝜆) = (elm(mat, index), l)
+        end
+    end
+    if 𝜆 ≈ typemax(T) error("Failed to pick element for $mat") end
+    return 𝜆, elm′
+end
+
+function randelm(mat::VectorizedMaterial{N, T}, σ::StaticVector{N, T}) where {N, T}
+    pickrand(elms_vector(mat), σ .* atomicfracs(mat))
+end
+function randelm(mat::ParametricMaterial{N, T}, σ::StaticVector{N, T}, pos::AbstractVector) where {N, T}
+    evaluateat(_mat -> randelm(_mat, σ), mat, pos)
+end
+# alternate method, guarantees no memory allocation
+function randelm_(mat::VectorizedMaterial{N, T}, σ::StaticVector{N, T}) where {N, T}
+    elm′::Element = elements[119]
+    𝜆::T = typemax(T)
+    for index in eachindex(σ)
+        l = -log(rand(T)) / (σ[index] * atomicfrac(mat, index))
+        if l < 𝜆
+            (𝜆, elm′) = l, elm(mat, index)
+        end
+    end
+    if 𝜆 ≈ typemax(T) error("Failed to pick element for $mat and $σ") end
+    return elm′
+end
+
+function randλelm(
+    ::Type{S},
+    mat::ParametricMaterial{<:Any, T},
+    E::T,
+    pos::AbstractVector{T},
+    dir::AbstractVector{T},
+    rtol::T=0.01,
+    maxiters::Integer=5,
+    quad::Any=nothing,
+) where {S<:ElasticScatteringCrossSection, T<:AbstractFloat}
+    σ = σₜ.(S, elms_vector(mat), Ref(E))
+    r::T = -log(rand(T))
+    𝜆::T = r *  λ(mat, σ, pos)
+    for _ in 1:maxiters
+        𝜆old = 𝜆
+        Λ′ = quadrature(zero(T), 𝜆, quad) do l
+            λ(mat, σ, pos .+ l .* dir)
+        end
+        𝜆 = r * Λ′ / 𝜆
+        if abs((𝜆 - 𝜆old) / 𝜆) < rtol 
             break
         end
     end
-    return rl
-end
-
-function _randelm!(
-    σ::AbstractVector{<:Real}, elms::AbstractVector{Element}, ::Type{T}
-) where {T<:AbstractFloat}
-    cumulative!(σ)
-    r = rand(T) * σ[end]
-    index = searchsortedfirst(σ, r)
-    return get(elms, index, elms[end])
-end
-
-"""
-    randelm(::Type{<:ElasticScatteringCrossSection}, mat::AbstractMaterial, E::Real, floattype::Type{<:AbstractFloat}=Float64)
-
-Randomly selected element responsible for scattering.
-"""
-function randelm(
-    ::Type{S}, mat::AbstractMaterial, E::Real, floattype::Type{T}=Float64
-) where {S<:ElasticScatteringCrossSection, T<:AbstractFloat}
-    _elms = collect(elms(mat))
-    σ = σₜ_all(S, mat, E, _elms)
-    return _randelm!(σ, _elms, T)
-end
-function randelm(
-    ::Type{S}, mat::VectorizedMaterial, E::Real, floattype::Type{T}=Float64
-) where {S<:ElasticScatteringCrossSection, T<:AbstractFloat}
-    σ = σₜ_all(S, mat, E)
-    return _randelm!(σ, elms_vector(mat), T)
-end
-
-"""
-    scatter(::Type{<:ElasticScatteringCrossSection}, mat::AbstractMaterial, E::Real, floattype::Type{<:AbstractFloat}=Float64)
-
-Randomly selected azimuthal and polar scattering angles relative to direction of travel after elastic scattering.
-"""
-function scatter(
-    ::Type{S}, mat::AbstractMaterial, E::Real, ::Type{T}=Float64
-) where {S<:ElasticScatteringCrossSection, T<:AbstractFloat}
-    elm′ = randelm(S, mat, E, T)
-    return (rand(S, elm′, E), T(2.0 * π) * rand(T))
-end
-
-function scatter!(
-    ::Type{S}, mat::MTemplateMaterial, E::Real, pos::AbstractVector, ::Type{T}=Float64
-) where {S<:ElasticScatteringCrossSection, T<:AbstractFloat}
-    update!(mat, pos)
-    return scatter(S, mat, E, T)
-end
-function scatter!(
-    ::Type{S}, mat::MTemplateMaterialLocked, E::Real, pos::AbstractVector, ::Type{T}=Float64
-) where {S<:ElasticScatteringCrossSection, T<:AbstractFloat}
-    return locked(mat) do mat
-        update!(mat, pos)
-        scatter(S, mat, E, T)
-    end
+    elm = randelm(mat, σ, pos .+ 𝜆 .* dir)
+    return 𝜆, elm
 end
 
 
@@ -445,11 +455,11 @@ end
 
 Draw an angle distributed according to the angular dependence of the differential screened Rutherford cross-section.
 """
-function Base.rand(ty::Type{<:ScreenedRutherfordType}, elm::Element, E::Real)
-    Y = rand()
+function Base.rand(ty::Type{<:ScreenedRutherfordType}, elm::Element, E::T)::T where T
+    Y = rand(T)
     return acos(1.0 + (Y - 1.0) / (ϵ(ty, elm, E) * Y + 0.5))
 end
-function Base.rand(ty::Type{Browning1994}, elm::Element, E::Real)
-    α, R = 7.0e-3 / (0.001 * E), rand()
+function Base.rand(ty::Type{Browning1994}, elm::Element, E::T)::T where T
+    α, R = 7.0e-3 / (0.001 * E), rand(T)
     return acos(1.0 - 2.0 * α * R / (1.0 + α - R))
 end

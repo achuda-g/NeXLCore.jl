@@ -1,7 +1,8 @@
 import Unitful: @u_str, ustrip
 import PhysicalConstants.CODATA2018: PlanckConstant, SpeedOfLightInVacuum
 import BoteSalvatICX # For ionization crosssections
-import FastGaussQuadrature: gausslegendre
+using FastGaussQuadrature: gausslegendre
+using QuadGK: quadgk
 
 # These evaluate at compile time...
 const plancksConstant = ustrip(PlanckConstant |> u"eV*s")
@@ -300,23 +301,40 @@ ionizationcrosssection(
 ) = ionizationcrosssection(z, ss, energy, ty==DefaultAlgorithm ? Bote2009 : ty)
 
 
-# A Singleton Type For N-point Gauss Legendre Quadrature
-struct FastGLQ{N} end
+# A Type For N-point Gauss Legendre Quadrature
+struct FastGLQ{N, T}
+    points::SizedVector{N, Pair{T, T}, Vector{Pair{T, T}}}
 
-"""
-    quadrature(::Type{GLQ{N}}) where N
-    quadrature(N::Integer)
-
-Get Integrator `quad(f, a, b)` that performs `N`-point Gauss Legendre quadrature of `f` from `a` to `b`.
-"""
-function quadrature(::Type{FastGLQ{N}}) where N
-    (xp, w) = gausslegendre(N)
-    function integrator(f, a, b)
-        h = 0.5 * (b - a)
-        m = 0.5 * (b + a)
-        x = m .+ xp .* h
-        return sum(f.(x) .* w) * h
+    function FastGLQ{T}(n::Integer) where T
+        (x, w) = gausslegendre(n)
+        points = SizedVector{n, Pair{T, T}, Vector{Pair{T, T}}}( T.(x) .=> T.(w))
+        new{n, T}(points)
     end
-    return integrator
 end
-quadrature(n::Integer) = quadrature(FastGLQ{n})
+
+Base.show(io::IO, ::MIME"text/plain", glq::FastGLQ) = show(io, glq)
+Base.show(io::IO, ::MIME"text/html", glq::FastGLQ) = show(io, glq)
+Base.show(io::IO, glq::FastGLQ) = print(io, "$(typeof(glq))")
+
+function quadrature(f::Any, lb::Real, ub::Real, glq::FastGLQ{N, T}) where {N, T}
+    h::T = T(0.5) * (ub - lb)
+    m::T = T(0.5) * (ub + lb)
+    res = sum(glq.points) do (x, w)
+        x_ = m + x * h
+        return f(x_) * w
+    end
+    return res * h
+end
+
+quadrature(f::Any, lb::Real, ub::Real, ::Nothing) = quadgk(f, lb, ub; rtol=1e-6)
+
+function pickrand(events::AbstractArray{E}, probabilities::AbstractArray{T})::E where {E, T<:Real}
+    r = rand(T) * sum(probabilities)
+    rnew = r
+    for (event, p) in zip(events, probabilities)
+        rnew -= p
+        if rnew ≤ zero(T) return event end
+    end
+    if abs(rnew) ≤ eps(r) return events[end] end
+    error("Could not pick event from $events with probabilities $probailities")
+end
