@@ -7,8 +7,6 @@ using LinearAlgebra
 using DataFrames
 using DataDeps, Downloads
 using StaticArrays
-using Tullio
-using DataStructures
 
 @reexport using PeriodicTable
 @reexport using NeXLUncertainties

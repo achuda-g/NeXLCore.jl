@@ -54,27 +54,6 @@ function dEdρs(
     end
     return res
 end
-function dEdρs(
-    ::Type{BEL},
-    e::Real,
-    mat::VectorizedMaterial{<:Any, T},
-    ::Type{MIP} = Berger1982,
-) where {T<:AbstractFloat, BEL<:BetheEnergyLoss, MIP<:NeXLMeanIonizationPotential}
-    sum(dEdρs.(BEL, Ref(e), elms_vector(mat), MIP) .* massfracs(mat))
-end
-# Guarantees no allocation
-function dEdρs_(
-    ::Type{BEL},
-    e::Real,
-    mat::VectorizedMaterial{<:Any, T},
-    ::Type{MIP} = Berger1982,
-) where {T<:AbstractFloat, BEL<:BetheEnergyLoss, MIP<:NeXLMeanIonizationPotential}
-    res = zero(T)
-    for index in eachindex(mat)
-        res += dEdρs(BEL, e, elm(mat, index), MIP) * massfrac(mat, index)
-    end
-    return res
-end
 
 """
     dEds(::Type{<:BetheEnergyLoss}, e::AbstractFloat, elm::Element, ρ::Real, ::Type{<:NeXLMeanIonizationPotential}=Berger1982)
@@ -103,16 +82,18 @@ function dEds(
 end
 
 """
-    range(::Type{BetheEnergyLoss}, mat::AbstractMaterial, e0::Float64, inclDensity = true)
+    range(::Type{BetheEnergyLoss}, mat::AbstractMaterial, e0::AbstractFloat, inclDensity = true; 
+        emin::AbstractFloat = 50.0, mip::Type{<:NeXLMeanIonizationPotential} = Berger1982,
+    )
 
 Calculates the electron range using numeric quadrature of a BetheEnergyLoss algorithm.
 """
 Base.range(
     ty::Type{<:BetheEnergyLoss},
     mat::AbstractMaterial,
-    e0::Float64,
+    e0::AbstractFloat,
     inclDensity = true;
-    emin = 50.0,
+    emin::AbstractFloat = 50.0,
     mip::Type{<:NeXLMeanIonizationPotential} = Berger1982,
 ) =
     quadgk(e -> 1.0 / dEds(ty, e, mat, mip), e0, emin, rtol = 1.0e-6)[1] *
@@ -121,17 +102,17 @@ Base.range(
 struct Kanaya1972 end
 
 """
-    range(::Type{Kanaya1972}, mat::AbstractMaterial, e0::Float64, inclDensity = true)
+    range(::Type{Kanaya1972}, mat::AbstractMaterial, e0::AbstractFloat, inclDensity = true)
 
 Calculates the Kanaya-Okayama electron range.
 Kanaya K, Okayama S (1972) Penetration and energy-loss theory of electrons in solid targets. J Appl Phys 5:43
 """
-function Base.range(::Type{Kanaya1972}, mat::AbstractMaterial, e0::Float64, inclDensity = true)
+function Base.range(::Type{Kanaya1972}, mat::AbstractMaterial, e0::AbstractFloat, inclDensity = true)
     ko(elm, e0) = 0.0276 * a(elm) * (0.001 * e0)^1.67 / z(elm)^0.89
     return (1.0e-4 / mapreduce(elm -> mat[elm] / ko(elm, e0), +, elms(mat))) /
            (inclDensity ? density(mat) : 1.0)
 end
-function Base.range(::Type{Kanaya1972}, mat::VectorizedMaterial, e0::Float64, inclDensity = true)
+function Base.range(::Type{Kanaya1972}, mat::VectorizedMaterial, e0::AbstractFloat, inclDensity = true)
     ko(elm, e0) = 0.0276 * a(elm) * (0.001 * e0)^1.67 / z(elm)^0.89
     return (1.0e-4 / sum(i -> massfrac(mat, i) / ko(elm_nocheck(mat, i), e0), eachindex(mat))) /
            (inclDensity ? density(mat) : 1.0)

@@ -110,7 +110,6 @@ elms(::AbstractMaterial) = error("Not Implemented")
 Get the atomic weight for the specified Element in the specified Material.
 """
 a(::Element, ::AbstractMaterial) = error("Not Implemented")
-atomicmass(mat::AbstractMaterial, elm::Element) = a(elm, mat)
 
 """
     atoms_per_g(elm::Element)
@@ -148,15 +147,6 @@ Number of atoms per cm³ in the material `mat`.
 The Material must define the `:Density` property.
 """
 atoms_per_cm³(mat::AbstractMaterial) = atoms_per_g(mat) * density(mat)
-
-"""
-    atomicfrac(mat::AbstractMaterial)
-
-Atomic fraction of element `elm` in material `mat`.
-"""
-atomicfrac(mat::AbstractMaterial, elm::Element) = _atomicfrac(mat, elm) / sum(e -> _atomicfrac(mat, e), elms(mat))
-
-_atomicfrac(mat::AbstractMaterial, elm::Element) = mat[elm] / a(elm, mat)
 
 """
 Holds basic data about a material including name, composition in mass fraction and optional propreties.
@@ -226,7 +216,6 @@ Base.copy(m::Material) =
 The elements with mass fraction ≠ 0.0 in `mat`.
 """
 elms(mat::Material) = keys(mat.massfraction)
-elms_vector(mat::Material) = SVector{length(mat), Element}(elm for elm in elms(mat))
 
 """
     ispure(mat::Material)
